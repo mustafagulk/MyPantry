@@ -8,7 +8,7 @@ const UNITS = ["units","pcs","kg","g","L","mL","bottles","cans","bags","boxes"];
 const PRICE_MODES = ["per unit","per kg","per box","per bottle","per can","total"];
 const CATEGORIES = ["🥩 Meat & Fish","🥦 Vegetables","🍎 Fruits","🥛 Dairy","🌾 Grains","🥫 Canned","🧊 Frozen","🧴 Other"];
 const FILAMENT_COLORS = ["Black","White","Grey","Red","Dark Red","Orange","Yellow","Lime","Green","Dark Green","Teal","Cyan","Sky Blue","Blue","Navy","Purple","Violet","Pink","Magenta","Brown","Beige","Gold","Silver","Transparent","Glow in Dark","Silk Red","Silk Gold","Silk Silver","Silk Blue","Silk Green","Rainbow","Wood Fill","Carbon Fiber","Marble"];
-const FILAMENT_TYPES = ["PLA","PLA+","PETG","ABS","ASA","TPU","Nylon","PC","HIPS","PVA","CPE","PP","PA","PA-CF","PETG-CF","PLA-CF","ABS-CF","Resin","Other"];
+const FILAMENT_TYPES = ["PLA","PLA+","PLA HS","PETG","ABS","ASA","TPU","Nylon","PC","HIPS","PVA","CPE","PP","PA","PA-CF","PETG-CF","PLA-CF","ABS-CF","Resin","Other"];
 const COLOR_HEX = {Black:"#111",White:"#f9f9f9",Grey:"#9ca3af",Red:"#ef4444","Dark Red":"#991b1b",Orange:"#f97316",Yellow:"#eab308",Lime:"#a3e635",Green:"#22c55e","Dark Green":"#15803d",Teal:"#14b8a6",Cyan:"#06b6d4","Sky Blue":"#38bdf8",Blue:"#3b82f6",Navy:"#1e3a5f",Purple:"#a855f7",Violet:"#7c3aed",Pink:"#ec4899",Magenta:"#d946ef",Brown:"#92400e",Beige:"#d4c5a9",Gold:"#ca8a04",Silver:"#94a3b8",Transparent:"#e0f2fe","Glow in Dark":"#bbf7d0","Silk Red":"#f87171","Silk Gold":"#fde68a","Silk Silver":"#e2e8f0","Silk Blue":"#93c5fd","Silk Green":"#6ee7b7",Rainbow:"linear-gradient(90deg,#ef4444,#f97316,#eab308,#22c55e,#3b82f6,#a855f7)","Wood Fill":"#a16207","Carbon Fiber":"#374151",Marble:"#e5e7eb"};
 const LIST_TYPES = ["pantry","filament"];
 
