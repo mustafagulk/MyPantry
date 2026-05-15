@@ -1,0 +1,25 @@
+{
+  "name": "MyPantry",
+  "short_name": "MyPantry",
+  "description": "Track your family groceries, expiry dates and pantry stock",
+  "start_url": "/mypantry/",
+  "scope": "/mypantry/",
+  "display": "standalone",
+  "background_color": "#f0fdf4",
+  "theme_color": "#16a34a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

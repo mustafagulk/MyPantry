@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#16a34a"/>
+  <meta name="description" content="Track your family groceries and pantry stock"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="MyPantry"/>
+  <link rel="apple-touch-icon" href="/icons/icon-192.png"/>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+  <title>MyPantry</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Nunito', sans-serif; background: #f0fdf4; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: #86efac; border-radius: 4px; }
+    input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Firebase: initialise first, then load app -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+      signOut, onAuthStateChanged, updateProfile
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import {
+      getFirestore, collection, doc, addDoc, setDoc, getDoc, getDocs,
+      updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove,
+      query, where, serverTimestamp, orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // ─────────────────────────────────────────────────────────
+    //  🔧 PASTE YOUR FIREBASE CONFIG HERE
+    //  Get it: Firebase Console → Project Settings → Your Apps
+    // ─────────────────────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey: "AIzaSyDXZObjYCbuGB6Sf4i2jOtWFpssGnaVdzo",
+      authDomain: "mypantry-8a269.firebaseapp.com",
+      projectId: "mypantry-8a269",
+      storageBucket: "mypantry-8a269.firebasestorage.app",
+      messagingSenderId: "682917054480",
+      appId: "1:682917054480:web:84f009671144e5512a6295"
+    };
+    // ─────────────────────────────────────────────────────────
+
+    const app  = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db   = getFirestore(app);
+
+    // Expose to global scope so MyPantry.js can access them
+    window.firebaseRefs      = { auth, db };
+    window.firebaseAuth      = { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile };
+    window.firebaseFirestore = { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, where, serverTimestamp, orderBy };
+
+    // Dynamically load the app after Firebase is ready
+    const script = document.createElement("script");
+    script.src = "./MyPantry.js";
+    document.body.appendChild(script);
+  </script>
+
+  <!-- Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/service-worker.js").catch(console.error);
+        if ("Notification" in window && Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+      });
+    }
+  </script>
+</body>
+</html>
