@@ -1,12 +1,16 @@
-// MyPantry v4 — Fixed sharing + low stock alerts + profile tab
-const { useState, useEffect, useMemo } = React;
+// MyPantry v6
+const { useState, useEffect, useMemo, useRef } = React;
 const { auth, db } = window.firebaseRefs;
 const { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } = window.firebaseAuth;
-const { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, where, serverTimestamp, orderBy } = window.firebaseFirestore;
+const { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, serverTimestamp, orderBy, limit } = window.firebaseFirestore;
 
 const UNITS = ["units","pcs","kg","g","L","mL","bottles","cans","bags","boxes"];
 const PRICE_MODES = ["per unit","per kg","per box","per bottle","per can","total"];
 const CATEGORIES = ["🥩 Meat & Fish","🥦 Vegetables","🍎 Fruits","🥛 Dairy","🌾 Grains","🥫 Canned","🧊 Frozen","🧴 Other"];
+const FILAMENT_COLORS = ["Black","White","Grey","Red","Dark Red","Orange","Yellow","Lime","Green","Dark Green","Teal","Cyan","Sky Blue","Blue","Navy","Purple","Violet","Pink","Magenta","Brown","Beige","Gold","Silver","Transparent","Glow in Dark","Silk Red","Silk Gold","Silk Silver","Silk Blue","Silk Green","Rainbow","Wood Fill","Carbon Fiber","Marble"];
+const FILAMENT_TYPES = ["PLA","PLA+","PETG","ABS","ASA","TPU","Nylon","PC","HIPS","PVA","CPE","PP","PA","PA-CF","PETG-CF","PLA-CF","ABS-CF","Resin","Other"];
+const COLOR_HEX = {Black:"#111",White:"#f9f9f9",Grey:"#9ca3af",Red:"#ef4444","Dark Red":"#991b1b",Orange:"#f97316",Yellow:"#eab308",Lime:"#a3e635",Green:"#22c55e","Dark Green":"#15803d",Teal:"#14b8a6",Cyan:"#06b6d4","Sky Blue":"#38bdf8",Blue:"#3b82f6",Navy:"#1e3a5f",Purple:"#a855f7",Violet:"#7c3aed",Pink:"#ec4899",Magenta:"#d946ef",Brown:"#92400e",Beige:"#d4c5a9",Gold:"#ca8a04",Silver:"#94a3b8",Transparent:"#e0f2fe","Glow in Dark":"#bbf7d0","Silk Red":"#f87171","Silk Gold":"#fde68a","Silk Silver":"#e2e8f0","Silk Blue":"#93c5fd","Silk Green":"#6ee7b7",Rainbow:"linear-gradient(90deg,#ef4444,#f97316,#eab308,#22c55e,#3b82f6,#a855f7)","Wood Fill":"#a16207","Carbon Fiber":"#374151",Marble:"#e5e7eb"};
+const LIST_TYPES = ["pantry","filament"];
 
 const AM = {
   added:    {icon:"✨",color:"#16a34a",bg:"#f0fdf4",label:"Added"},
@@ -14,21 +18,22 @@ const AM = {
   increased:{icon:"📈",color:"#2563eb",bg:"#eff6ff",label:"Increased"},
   decreased:{icon:"📉",color:"#d97706",bg:"#fffbeb",label:"Decreased"},
   edited:   {icon:"✏️",color:"#7c3aed",bg:"#faf5ff",label:"Edited"},
-  expiry:   {icon:"📅",color:"#0891b2",bg:"#f0f9ff",label:"Expiry set"},
 };
 
 function daysUntil(e){if(!e)return null;const t=new Date();t.setHours(0,0,0,0);return Math.ceil((new Date(e+"T00:00:00")-t)/86400000);}
 function fmtDate(d){if(!d)return"";return new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});}
 function fmtTime(iso){if(!iso)return"";const d=new Date(iso),now=new Date(),dm=Math.floor((now-d)/60000);if(dm<1)return"Just now";if(dm<60)return`${dm}m ago`;const dh=Math.floor(dm/60);if(dh<24)return`${dh}h ago`;const dd=Math.floor(dh/24);if(dd<7)return`${dd}d ago`;return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});}
 function calcPrice(pv,pm,a){if(!pv||!a)return null;const p=parseFloat(pv),amt=parseFloat(a);if(isNaN(p)||isNaN(amt)||amt===0)return null;if(pm==="total")return{total:p.toFixed(2),perUnit:(p/amt).toFixed(2)};return{total:(p*amt).toFixed(2),perUnit:p.toFixed(2)};}
-function isLowStock(item){const a=parseFloat(item.amount);return!isNaN(a)&&a<=1;}
+function getLowThreshold(item){const t=parseFloat(item.lowThreshold);return isNaN(t)?1:t;}
+function isLowStock(item){const a=parseFloat(item.amount);if(isNaN(a))return false;if(a===0)return true;return a<=getLowThreshold(item);}
+function colorSwatch(color){const hex=COLOR_HEX[color]||"#9ca3af";const isGrad=hex.startsWith("linear");return React.createElement("span",{style:{display:"inline-block",width:14,height:14,borderRadius:"50%",background:hex,border:"1.5px solid rgba(0,0,0,0.15)",verticalAlign:"middle",marginRight:5,flexShrink:0}});}
 
 function Spinner(){return React.createElement("div",{style:{display:"flex",justifyContent:"center",padding:40}},React.createElement("div",{style:{width:36,height:36,border:"3px solid #dcfce7",borderTopColor:"#16a34a",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}),React.createElement("style",null,"@keyframes spin{to{transform:rotate(360deg)}}"));}
 
 function Badge({days}){
   if(days===null)return null;
   const c=days<0?{bg:"#dc2626",col:"#fff",t:"Expired"}:days===0?{bg:"#fee2e2",col:"#dc2626",t:"Today!"}:days<=2?{bg:"#ffe4e6",col:"#dc2626",t:`${days}d`}:days<=7?{bg:"#fef9c3",col:"#a16207",t:`${days}d`}:{bg:"#dcfce7",col:"#16a34a",t:`${days}d`};
-  return React.createElement("span",{style:{background:c.bg,color:c.col,borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800}},c.t);
+  return React.createElement("span",{style:{background:c.bg,color:c.col,borderRadius:20,padding:"2px 8px",fontSize:10,fontWeight:800}},c.t);
 }
 
 function Sheet({show,onClose,title,children}){
@@ -46,22 +51,18 @@ function Sheet({show,onClose,title,children}){
 
 function HRow({ev,showItem}){
   const m=AM[ev.action]||AM.edited;
-  const userName=ev.user||"Unknown";
   const ts=ev.ts?.toDate?fmtTime(ev.ts.toDate().toISOString()):fmtTime(ev.ts);
-  return React.createElement("div",{style:{display:"flex",gap:12,padding:"11px 0",borderBottom:"1px solid #f7fdf9",alignItems:"flex-start"}},
-    React.createElement("div",{style:{width:34,height:34,borderRadius:"50%",background:m.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0,border:`1.5px solid ${m.color}33`}},m.icon),
-    React.createElement("div",{style:{flex:1,minWidth:0}},
-      showItem&&React.createElement("div",{style:{fontSize:13,fontWeight:800,color:"#111827",marginBottom:1}},ev.itemName),
-      React.createElement("div",{style:{fontSize:13,color:"#374151",fontWeight:600}},ev.detail),
-      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:3,flexWrap:"wrap"}},
-        React.createElement("span",{style:{fontSize:11,color:m.color,fontWeight:700,background:m.bg,padding:"1px 7px",borderRadius:10}},m.label),
-        React.createElement("span",{style:{fontSize:11,color:"#9ca3af"}},`by ${userName} · ${ts}`)
-      )
+  return React.createElement("div",{style:{display:"flex",gap:12,padding:"10px 0",borderBottom:"1px solid #f7fdf9",alignItems:"flex-start"}},
+    React.createElement("div",{style:{width:30,height:30,borderRadius:"50%",background:m.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0}},m.icon),
+    React.createElement("div",{style:{flex:1}},
+      showItem&&React.createElement("div",{style:{fontSize:13,fontWeight:800,color:"#111827"}},ev.itemName),
+      React.createElement("div",{style:{fontSize:12,color:"#374151",fontWeight:600}},ev.detail),
+      React.createElement("div",{style:{fontSize:11,color:"#9ca3af",marginTop:2}},`${m.label} · by ${ev.user||"?"} · ${ts}`)
     )
   );
 }
 
-// ── Auth Screen ───────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────
 function AuthScreen(){
   const [mode,setMode]=useState("login");
   const [email,setEmail]=useState("");
@@ -69,21 +70,14 @@ function AuthScreen(){
   const [name,setName]=useState("");
   const [err,setErr]=useState("");
   const [loading,setLoading]=useState(false);
-
   async function submit(){
     setErr("");setLoading(true);
     try{
-      if(mode==="login"){
-        await signInWithEmailAndPassword(auth,email,pass);
-      }else{
-        const c=await createUserWithEmailAndPassword(auth,email,pass);
-        await updateProfile(c.user,{displayName:name});
-        await setDoc(doc(db,"users",c.user.uid),{name,email:email.toLowerCase().trim(),pinnedItems:[],listIds:[],itemFrequency:{}});
-      }
+      if(mode==="login"){await signInWithEmailAndPassword(auth,email,pass);}
+      else{const c=await createUserWithEmailAndPassword(auth,email,pass);await updateProfile(c.user,{displayName:name});await setDoc(doc(db,"users",c.user.uid),{name,email:email.toLowerCase().trim(),pinnedItems:[],listIds:[],itemFrequency:{},photoURL:""});}
     }catch(e){setErr(e.message.replace("Firebase: ","").replace(/\(.*\)/,""));}
     setLoading(false);
   }
-
   const inp={width:"100%",padding:"11px 14px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box",marginBottom:12};
   return React.createElement("div",{style:{minHeight:"100vh",background:"linear-gradient(160deg,#f0fdf4,#dcfce7)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Nunito',sans-serif"}},
     React.createElement("div",{style:{fontSize:52,marginBottom:8}},"🥬"),
@@ -102,66 +96,180 @@ function AuthScreen(){
   );
 }
 
-// ── Items Tab ─────────────────────────────────────────────────
-function ItemsTab({filtered,items,hist,search,setSearch,filterCat,setFilterCat,sortBy,setSortBy,totalVal,loading,setEditItem,setShowAdd,openDetail,adjust,deleteItem,inp}){
+// ── Avatar Component ──────────────────────────────────────────
+function Avatar({size=36,photoURL,displayName,onClick,style={}}){
+  const initials=(displayName||"?")[0].toUpperCase();
+  return photoURL
+    ? React.createElement("img",{src:photoURL,onClick,style:{width:size,height:size,borderRadius:"50%",objectFit:"cover",cursor:onClick?"pointer":"default",border:"2px solid rgba(255,255,255,0.4)",...style}})
+    : React.createElement("div",{onClick,style:{width:size,height:size,borderRadius:"50%",background:"linear-gradient(135deg,#16a34a,#15803d)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.42,fontWeight:900,color:"#fff",cursor:onClick?"pointer":"default",border:"2px solid rgba(255,255,255,0.4)",flexShrink:0,...style}},initials);
+}
+
+// ── Profile Sheet (opened from header avatar) ─────────────────
+function ProfileSheet({show,onClose,userId,userProfile}){
+  const [newName,setNewName]=useState(auth.currentUser?.displayName||"");
+  const [saving,setSaving]=useState(false);
+  const [msg,setMsg]=useState("");
+  const [photoURL,setPhotoURL]=useState(auth.currentUser?.photoURL||userProfile?.photoURL||"");
+  const fileRef=useRef(null);
+
+  async function saveName(){
+    if(!newName.trim())return;
+    setSaving(true);
+    await updateProfile(auth.currentUser,{displayName:newName.trim()});
+    await updateDoc(doc(db,"users",userId),{name:newName.trim()});
+    setMsg("Saved!");setSaving(false);setTimeout(()=>setMsg(""),2000);
+  }
+
+  function handlePhoto(e){
+    const file=e.target.files[0];
+    if(!file)return;
+    if(file.size>2*1024*1024){setMsg("Image must be under 2MB");return;}
+    const reader=new FileReader();
+    reader.onload=async ev=>{
+      const url=ev.target.result; // base64 data URL
+      setPhotoURL(url);
+      await updateProfile(auth.currentUser,{photoURL:url});
+      await updateDoc(doc(db,"users",userId),{photoURL:url});
+      setMsg("Photo updated!");setTimeout(()=>setMsg(""),2000);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  const inp={width:"100%",padding:"11px 14px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
+
+  return React.createElement(Sheet,{show,onClose,title:"👤 Profile"},
+    // Avatar upload
+    React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:20}},
+      React.createElement("div",{style:{position:"relative",marginBottom:8}},
+        React.createElement(Avatar,{size:80,photoURL,displayName:auth.currentUser?.displayName,style:{border:"3px solid #16a34a"}}),
+        React.createElement("button",{onClick:()=>fileRef.current?.click(),style:{position:"absolute",bottom:0,right:0,width:26,height:26,borderRadius:"50%",background:"#16a34a",border:"2px solid #fff",color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"📷")
+      ),
+      React.createElement("input",{ref:fileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:handlePhoto}),
+      React.createElement("div",{style:{fontSize:11,color:"#9ca3af"}},"Tap camera to change photo"),
+      msg&&React.createElement("div",{style:{color:"#16a34a",fontSize:12,marginTop:4,fontWeight:700}},msg)
+    ),
+    // Email (readonly)
+    React.createElement("div",{style:{marginBottom:12}},
+      React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}},"Email"),
+      React.createElement("div",{style:{fontSize:14,fontWeight:700,color:"#111827",padding:"10px 12px",background:"#f9fafb",borderRadius:10,border:"1.5px solid #f0fdf4"}},(auth.currentUser?.email||"—"))
+    ),
+    // Display name
+    React.createElement("div",{style:{marginBottom:16}},
+      React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}},"Display Name"),
+      React.createElement("div",{style:{display:"flex",gap:8}},
+        React.createElement("input",{style:{...inp,flex:1},value:newName,onChange:e=>setNewName(e.target.value),placeholder:"Your name"}),
+        React.createElement("button",{onClick:saveName,disabled:saving,style:{padding:"11px 16px",borderRadius:12,border:"none",background:"#16a34a",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},saving?"…":"Save")
+      )
+    ),
+    // Stats
+    React.createElement("div",{style:{background:"#f9fafb",borderRadius:12,padding:"12px 14px",marginBottom:16}},
+      [{l:"Lists",v:userProfile?.listIds?.length||0},{l:"Pinned Items",v:userProfile?.pinnedItems?.length||0}].map(r=>
+        React.createElement("div",{key:r.l,style:{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f0fdf4"}},
+          React.createElement("span",{style:{fontSize:13,color:"#6b7280",fontWeight:600}},r.l),
+          React.createElement("span",{style:{fontSize:13,fontWeight:800,color:"#111827"}},r.v)
+        )
+      )
+    ),
+    React.createElement("button",{onClick:()=>signOut(auth),style:{width:"100%",padding:"13px",borderRadius:14,border:"1.5px solid #fecaca",background:"#fff5f5",color:"#dc2626",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit"}},"🚪 Sign Out")
+  );
+}
+
+// ── Chat Tab ──────────────────────────────────────────────────
+function ChatTab({listId,userId,userProfile}){
+  const [messages,setMessages]=useState([]);
+  const [text,setText]=useState("");
+  const [sending,setSending]=useState(false);
+  const bottomRef=useRef(null);
+  const photoURL=auth.currentUser?.photoURL||userProfile?.photoURL||"";
+
+  useEffect(()=>{
+    const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"),limit(200));
+    return onSnapshot(q,snap=>{setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));});
+  },[listId]);
+
+  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
+
+  async function send(){
+    const t=text.trim();if(!t||sending)return;
+    setSending(true);setText("");
+    await addDoc(collection(db,"lists",listId,"chat"),{text:t,userId,userName:auth.currentUser?.displayName||auth.currentUser?.email||"Unknown",photoURL,ts:serverTimestamp()});
+    setSending(false);
+  }
+
+  function handleKey(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}
+
+  const grouped=messages.map((msg,i)=>{
+    const prev=messages[i-1];
+    const showAvatar=!prev||prev.userId!==msg.userId;
+    const isMe=msg.userId===userId;
+    const ts=msg.ts?.toDate?fmtTime(msg.ts.toDate().toISOString()):"";
+    return{...msg,showAvatar,isMe,ts};
+  });
+
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"calc(100vh - 160px)"}},
+    React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:2}},
+      messages.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"60px 20px",fontSize:14,fontWeight:600}},React.createElement("div",{style:{fontSize:40,marginBottom:8}},"💬"),"No messages yet. Say hi!"),
+      grouped.map(msg=>React.createElement("div",{key:msg.id,style:{display:"flex",flexDirection:"column",alignItems:msg.isMe?"flex-end":"flex-start",marginTop:msg.showAvatar?10:2}},
+        msg.showAvatar&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexDirection:msg.isMe?"row-reverse":"row"}},
+          React.createElement(Avatar,{size:22,photoURL:msg.photoURL,displayName:msg.userName}),
+          React.createElement("span",{style:{fontSize:11,fontWeight:700,color:"#6b7280"}},msg.isMe?"You":msg.userName)
+        ),
+        React.createElement("div",{style:{maxWidth:"78%",padding:"9px 13px",borderRadius:msg.isMe?"18px 18px 4px 18px":"18px 18px 18px 4px",background:msg.isMe?"linear-gradient(135deg,#16a34a,#15803d)":"#fff",color:msg.isMe?"#fff":"#111827",fontSize:14,fontWeight:600,boxShadow:"0 1px 4px rgba(0,0,0,0.08)",lineHeight:1.4,wordBreak:"break-word",border:msg.isMe?"none":"1.5px solid #f0fdf4"}},msg.text),
+        React.createElement("span",{style:{fontSize:10,color:"#9ca3af",marginTop:2,paddingLeft:msg.isMe?0:4,paddingRight:msg.isMe?4:0}},msg.ts)
+      )),
+      React.createElement("div",{ref:bottomRef})
+    ),
+    React.createElement("div",{style:{padding:"10px 14px",background:"#fff",borderTop:"1px solid #f0fdf4",display:"flex",gap:8,alignItems:"flex-end"}},
+      React.createElement("textarea",{value:text,onChange:e=>setText(e.target.value),onKeyDown:handleKey,placeholder:"Message…",rows:1,style:{flex:1,padding:"10px 14px",borderRadius:20,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",resize:"none",lineHeight:1.4,maxHeight:100,overflowY:"auto"}}),
+      React.createElement("button",{onClick:send,disabled:!text.trim()||sending,style:{width:40,height:40,borderRadius:"50%",background:text.trim()?"linear-gradient(135deg,#16a34a,#15803d)":"#e5e7eb",border:"none",color:"#fff",fontSize:18,cursor:text.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .2s"}},"➤")
+    )
+  );
+}
+
+// ── Compact Items Tab (Pantry) ────────────────────────────────
+function ItemsTab({filtered,items,hist,search,setSearch,filterCat,setFilterCat,sortBy,setSortBy,totalVal,loading,setEditItem,setShowAdd,openDetail,adjust,deleteItem,inp,isFilament}){
   const stepFor=u=>["kg","L","g","mL"].includes(u)?0.1:1;
   return React.createElement("div",null,
     React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8,marginBottom:10}},
       React.createElement("input",{style:{...inp,background:"#fff"},placeholder:"🔍 Search…",value:search,onChange:e=>setSearch(e.target.value)}),
       React.createElement("div",{style:{display:"flex",gap:8}},
-        React.createElement("select",{style:{...inp,flex:1,background:"#fff",fontSize:12},value:filterCat,onChange:e=>setFilterCat(e.target.value)},
+        !isFilament&&React.createElement("select",{style:{...inp,flex:1,background:"#fff",fontSize:12},value:filterCat,onChange:e=>setFilterCat(e.target.value)},
           React.createElement("option",{value:"All"},"All Categories"),
           CATEGORIES.map(c=>React.createElement("option",{key:c},c))
         ),
         React.createElement("select",{style:{...inp,flex:1,background:"#fff",fontSize:12},value:sortBy,onChange:e=>setSortBy(e.target.value)},
-          React.createElement("option",{value:"expiry"},"By Expiry"),
+          React.createElement("option",{value:"expiry"},isFilament?"By Date Bought":"By Expiry"),
           React.createElement("option",{value:"name"},"By Name"),
-          React.createElement("option",{value:"category"},"By Category")
+          !isFilament&&React.createElement("option",{value:"category"},"By Category")
         )
       )
     ),
-    React.createElement("div",{style:{fontSize:12,color:"#9ca3af",marginBottom:10,fontWeight:600}},`${filtered.length} items${totalVal>0?` · Est. $${totalVal.toFixed(2)}`:""}`),
-    loading?React.createElement(Spinner,null):React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-      filtered.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px",fontSize:14}},"Nothing here. Tap '+ Add'! 🛒"),
-      filtered.map(item=>{
-        const days=daysUntil(item.expiry),price=calcPrice(item.priceVal,item.priceMode,item.amount),urgent=days!==null&&days<=2,low=isLowStock(item);
-        const lastChange=hist.find(h=>h.itemId===item.id);
-        const ts=lastChange?.ts?.toDate?fmtTime(lastChange.ts.toDate().toISOString()):lastChange?fmtTime(lastChange.ts):"";
-        const borderColor=urgent?"#fde68a":low?"#fca5a5":"#f0fdf4";
-        const bgColor=urgent?"#fffbeb":low?"#fff5f5":"#fff";
-        return React.createElement("div",{key:item.id,style:{background:bgColor,borderRadius:16,padding:"14px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:`1.5px solid ${borderColor}`}},
-          React.createElement("div",{onClick:()=>openDetail(item),style:{cursor:"pointer"}},
-            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}},
-              React.createElement("div",null,
-                React.createElement("div",{style:{fontSize:15,fontWeight:800,color:"#111827",marginBottom:2}},item.name),
-                React.createElement("div",{style:{fontSize:11,color:"#9ca3af"}},`${item.category}${item.note?` · ${item.note}`:""}`)
-              ),
-              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5}},
-                low&&React.createElement("span",{style:{background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800}},"🪫 Low"),
-                React.createElement(Badge,{days}),
-                React.createElement("span",{style:{color:"#d1d5db",fontSize:16}},"›")
-              )
+    React.createElement("div",{style:{fontSize:12,color:"#9ca3af",marginBottom:8,fontWeight:600}},`${filtered.length} items${!isFilament&&totalVal>0?` · Est. $${totalVal.toFixed(2)}`:""}`),
+    loading?React.createElement(Spinner,null):React.createElement("div",{style:{background:"#fff",borderRadius:16,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1.5px solid #f0fdf4"}},
+      filtered.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px",fontSize:14}},"Nothing here. Tap '+ Add'!"),
+      filtered.map((item,idx)=>{
+        const days=daysUntil(item.expiry),low=isLowStock(item),urgent=days!==null&&days<=2;
+        const rowBg=urgent?"#fffbeb":low?"#fff5f5":"#fff";
+        const isLast=idx===filtered.length-1;
+        const isFilamentItem=isFilament||item.category==="🧵 Filament";
+        return React.createElement("div",{key:item.id,style:{display:"flex",alignItems:"center",padding:"10px 14px",background:rowBg,borderBottom:isLast?"none":"1px solid #f0fdf4",gap:10}},
+          // Color swatch for filament
+          isFilamentItem&&item.color&&React.createElement("div",{style:{width:14,height:14,borderRadius:"50%",background:COLOR_HEX[item.color]||"#9ca3af",border:"1.5px solid rgba(0,0,0,0.15)",flexShrink:0}}),
+          React.createElement("div",{onClick:()=>openDetail(item),style:{flex:1,cursor:"pointer",minWidth:0}},
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              React.createElement("span",{style:{fontSize:14,fontWeight:800,color:"#111827",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},item.name),
+              isFilamentItem&&item.filamentType&&React.createElement("span",{style:{fontSize:10,background:"#f0fdf4",color:"#15803d",borderRadius:8,padding:"1px 6px",fontWeight:700,flexShrink:0}},item.filamentType),
+              low&&React.createElement("span",{style:{fontSize:10,background:"#fee2e2",color:"#dc2626",borderRadius:10,padding:"1px 6px",fontWeight:800,flexShrink:0}},"🪫"),
+              !isFilamentItem&&React.createElement(Badge,{days})
             ),
-            lastChange&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5,marginBottom:8}},
-              React.createElement("span",{style:{fontSize:10,color:"#9ca3af"}},"Last:"),
-              React.createElement("span",{style:{fontSize:10,background:(AM[lastChange.action]||AM.edited).bg,color:(AM[lastChange.action]||AM.edited).color,borderRadius:10,padding:"1px 7px",fontWeight:700}},`${(AM[lastChange.action]||AM.edited).icon} ${lastChange.detail}`),
-              React.createElement("span",{style:{fontSize:10,color:"#9ca3af"}},ts)
+            React.createElement("div",{style:{fontSize:11,color:"#9ca3af",marginTop:2}},
+              isFilamentItem&&item.color?item.color:(item.category||"")
             )
           ),
-          React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}},
-            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
-              React.createElement("button",{onClick:()=>adjust(item,-stepFor(item.unit)),style:{width:30,height:30,borderRadius:"50%",background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:18,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}},"−"),
-              React.createElement("span",{style:{fontSize:15,fontWeight:800,minWidth:70,textAlign:"center"}},`${item.amount}`,React.createElement("span",{style:{fontSize:11,color:"#9ca3af",fontWeight:400}},` ${item.unit}`)),
-              React.createElement("button",{onClick:()=>adjust(item,stepFor(item.unit)),style:{width:30,height:30,borderRadius:"50%",background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:18,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}},"+")
-            ),
-            React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}},
-              price&&React.createElement("span",{style:{fontSize:13,fontWeight:800,color:"#16a34a"}},`$${price.total}`),
-              item.expiry&&React.createElement("span",{style:{fontSize:11,color:"#9ca3af"}},fmtDate(item.expiry))
-            )
-          ),
-          React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:6,marginTop:10,paddingTop:10,borderTop:"1px solid #f0fdf4"}},
-            React.createElement("button",{onClick:()=>{setEditItem(item);setShowAdd(true);},style:{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit"}},"✏️ Edit"),
-            React.createElement("button",{onClick:()=>deleteItem(item),style:{background:"#fff1f2",border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,fontWeight:600,color:"#dc2626",fontFamily:"inherit"}},"🗑️ Remove")
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,flexShrink:0}},
+            React.createElement("button",{onClick:()=>adjust(item,-stepFor(item.unit)),style:{width:26,height:26,borderRadius:"50%",background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:16,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},"−"),
+            React.createElement("span",{style:{fontSize:13,fontWeight:800,color:"#111827",minWidth:55,textAlign:"center"}},`${item.amount}`,React.createElement("span",{style:{fontSize:10,color:"#9ca3af",fontWeight:400}},` ${item.unit}`)),
+            React.createElement("button",{onClick:()=>adjust(item,stepFor(item.unit)),style:{width:26,height:26,borderRadius:"50%",background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:16,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},"+")
           )
         );
       })
@@ -170,70 +278,72 @@ function ItemsTab({filtered,items,hist,search,setSearch,filterCat,setFilterCat,s
 }
 
 // ── Alerts Tab ────────────────────────────────────────────────
-function AlertsTab({items,openDetail}){
-  const expired=items.filter(i=>daysUntil(i.expiry)<0);
-  const soon=items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;});
-  const low=items.filter(i=>isLowStock(i));
+function AlertsTab({items,openDetail,isFilament}){
+  const expired=items.filter(i=>daysUntil(i.expiry)<0&&!isFilament);
+  const soon=items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7&&!isFilament;});
+
+  // Low stock: 0 always first, then sorted by amount ascending, then by threshold
+  const low=items
+    .filter(i=>isLowStock(i))
+    .sort((a,b)=>{
+      const aa=parseFloat(a.amount)||0;
+      const bb=parseFloat(b.amount)||0;
+      if(aa===0&&bb!==0)return -1;
+      if(bb===0&&aa!==0)return 1;
+      return aa-bb;
+    });
+
   const allClear=expired.length===0&&soon.length===0&&low.length===0;
 
-  function AlertCard({item,bg,border,badge,sub}){
-    return React.createElement("div",{onClick:()=>openDetail(item),style:{background:bg,borderRadius:16,padding:"14px",border:`1.5px solid ${border}`,marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}},
-      React.createElement("div",null,
-        React.createElement("div",{style:{fontWeight:800,color:"#111827"}},item.name),
+  function AlertRow({item,bg,border,badge,sub}){
+    return React.createElement("div",{onClick:()=>openDetail(item),style:{background:bg,borderRadius:14,padding:"11px 14px",border:`1.5px solid ${border}`,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",gap:8}},
+      React.createElement("div",{style:{minWidth:0,flex:1}},
+        React.createElement("div",{style:{fontWeight:800,color:"#111827",fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},item.name),
         React.createElement("div",{style:{fontSize:12,color:"#9ca3af",marginTop:2}},sub)
-      ),
-      badge
+      ),badge
     );
   }
 
   return React.createElement("div",null,
-    allClear&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"48px 20px",fontWeight:600}},
-      React.createElement("div",{style:{fontSize:40,marginBottom:8}},"✅"),
-      "All good! Nothing needs attention."
+    allClear&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"48px 20px",fontWeight:600}},React.createElement("div",{style:{fontSize:40,marginBottom:8}},"✅"),"All good!"),
+    // 0 quantity always first, separated
+    low.filter(i=>parseFloat(i.amount)===0).length>0&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#dc2626",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:4}},"🚨 Empty (0)"),
+      low.filter(i=>parseFloat(i.amount)===0).map(item=>React.createElement(AlertRow,{key:item.id,item,bg:"#fff5f5",border:"#fca5a5",
+        badge:React.createElement("span",{style:{background:"#dc2626",color:"#fff",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800,flexShrink:0}},"0"),
+        sub:`${item.category||""} · threshold: ${getLowThreshold(item)} ${item.unit}`}))
     ),
-
-    // Expired section
-    expired.length>0&&React.createElement("div",null,
-      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:4}},"🚨 Expired"),
-      expired.map(item=>React.createElement(AlertCard,{key:item.id,item,bg:"#fff5f5",border:"#fecaca",
-        badge:React.createElement(Badge,{days:daysUntil(item.expiry)}),
-        sub:`${item.amount} ${item.unit} · expired ${fmtDate(item.expiry)}`
-      }))
+    // Low stock (>0 but ≤ threshold), sorted by amount asc
+    low.filter(i=>parseFloat(i.amount)>0).length>0&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:low.filter(i=>parseFloat(i.amount)===0).length>0?16:4}},"🪫 Low Stock"),
+      low.filter(i=>parseFloat(i.amount)>0).map(item=>React.createElement(AlertRow,{key:item.id,item,bg:"#fff5f5",border:"#fca5a5",
+        badge:React.createElement("span",{style:{background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800,flexShrink:0}},`${item.amount} ${item.unit}`),
+        sub:`${item.category||""} · alert below: ${getLowThreshold(item)} ${item.unit}`}))
     ),
-
-    // Expiring soon section
-    soon.length>0&&React.createElement("div",null,
-      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:expired.length>0?16:4}},"⏰ Expiring Soon"),
-      soon.map(item=>React.createElement(AlertCard,{key:item.id,item,bg:"#fffbeb",border:"#fde68a",
-        badge:React.createElement(Badge,{days:daysUntil(item.expiry)}),
-        sub:`${item.amount} ${item.unit} · exp ${fmtDate(item.expiry)}`
-      }))
+    !isFilament&&expired.length>0&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:low.length>0?16:4}},"🚨 Expired"),
+      expired.map(item=>React.createElement(AlertRow,{key:item.id,item,bg:"#fff5f5",border:"#fecaca",badge:React.createElement(Badge,{days:daysUntil(item.expiry)}),sub:`${item.amount} ${item.unit} · expired ${fmtDate(item.expiry)}`}))
     ),
-
-    // Low stock section
-    low.length>0&&React.createElement("div",null,
-      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:(expired.length>0||soon.length>0)?16:4}},"🪫 Low Stock (0 or 1)"),
-      low.map(item=>React.createElement(AlertCard,{key:item.id,item,bg:"#fff5f5",border:"#fca5a5",
-        badge:React.createElement("span",{style:{background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800}},`${item.amount} ${item.unit}`),
-        sub:item.category
-      }))
+    !isFilament&&soon.length>0&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:(low.length>0||expired.length>0)?16:4}},"⏰ Expiring Soon"),
+      soon.map(item=>React.createElement(AlertRow,{key:item.id,item,bg:"#fffbeb",border:"#fde68a",badge:React.createElement(Badge,{days:daysUntil(item.expiry)}),sub:`${item.amount} ${item.unit} · exp ${fmtDate(item.expiry)}`}))
     )
   );
 }
 
 // ── History Tab ───────────────────────────────────────────────
 function HistoryTab({hist,hFilter,setHFilter}){
-  const filterOptions=[["all","All"],["added","Added"],["removed","Removed"],["increased","Increased"],["decreased","Decreased"],["edited","Edited"]];
+  const opts=[["all","All"],["added","Added"],["removed","Removed"],["increased","Increased"],["decreased","Decreased"],["edited","Edited"]];
   const groups={};
   hist.forEach(e=>{
-    const ts=e.ts?.toDate?e.ts.toDate():new Date(e.ts);
+    const ts=e.ts?.toDate?e.ts.toDate():new Date(e.ts||Date.now());
     const day=ts.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"});
     if(!groups[day])groups[day]=[];
     groups[day].push(e);
   });
   return React.createElement("div",null,
     React.createElement("div",{style:{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}},
-      filterOptions.map(([k,l])=>React.createElement("button",{key:k,onClick:()=>setHFilter(k),style:{padding:"5px 12px",borderRadius:20,border:`1.5px solid ${hFilter===k?"#16a34a":"#d1fae5"}`,background:hFilter===k?"#16a34a":"#fff",color:hFilter===k?"#fff":"#6b7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}},k!=="all"&&(AM[k]?.icon+" "),l))
+      opts.map(([k,l])=>React.createElement("button",{key:k,onClick:()=>setHFilter(k),style:{padding:"5px 12px",borderRadius:20,border:`1.5px solid ${hFilter===k?"#16a34a":"#d1fae5"}`,background:hFilter===k?"#16a34a":"#fff",color:hFilter===k?"#fff":"#6b7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}},k!=="all"&&(AM[k]?.icon+" "),l))
     ),
     hist.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:14}},"No history yet."),
     Object.entries(groups).map(([day,evts])=>React.createElement("div",{key:day,style:{marginBottom:16}},
@@ -246,17 +356,35 @@ function HistoryTab({hist,hFilter,setHFilter}){
 }
 
 // ── Stats Tab ─────────────────────────────────────────────────
-function StatsTab({items,totalVal}){
+function StatsTab({items,totalVal,isFilament}){
   return React.createElement("div",null,
     React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}},
-      [{l:"Total Items",v:items.length,c:"#16a34a"},{l:"Expiring Soon",v:items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;}).length,c:"#f59e0b"},{l:"Expired",v:items.filter(i=>daysUntil(i.expiry)<0).length,c:"#ef4444"},{l:"Est. Value",v:`$${totalVal.toFixed(2)}`,c:"#8b5cf6"}].map(s=>
+      [{l:"Total Items",v:items.length,c:"#16a34a"},
+       !isFilament&&{l:"Expiring Soon",v:items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;}).length,c:"#f59e0b"},
+       {l:"Low/Empty",v:items.filter(i=>isLowStock(i)).length,c:"#ef4444"},
+       !isFilament&&{l:"Est. Value",v:`$${totalVal.toFixed(2)}`,c:"#8b5cf6"},
+       isFilament&&{l:"Colors",v:new Set(items.map(i=>i.color).filter(Boolean)).size,c:"#8b5cf6"},
+       isFilament&&{l:"Types",v:new Set(items.map(i=>i.filamentType).filter(Boolean)).size,c:"#0891b2"},
+      ].filter(Boolean).map(s=>
         React.createElement("div",{key:s.l,style:{background:"#fff",borderRadius:16,padding:"16px 12px",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}},
           React.createElement("div",{style:{fontSize:26,fontWeight:900,color:s.c}},s.v),
           React.createElement("div",{style:{fontSize:11,color:"#9ca3af",marginTop:3,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}},s.l)
         )
       )
     ),
-    CATEGORIES.map(cat=>{const n=items.filter(i=>i.category===cat).length;if(!n)return null;return React.createElement("div",{key:cat,style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
+    isFilament&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"By Color"),
+      [...new Set(items.map(i=>i.color).filter(Boolean))].map(color=>{
+        const n=items.filter(i=>i.color===color).length;
+        return React.createElement("div",{key:color,style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
+          React.createElement("div",{style:{width:14,height:14,borderRadius:"50%",background:COLOR_HEX[color]||"#9ca3af",border:"1px solid rgba(0,0,0,0.1)",flexShrink:0}}),
+          React.createElement("span",{style:{width:120,fontSize:12,color:"#374151",fontWeight:700,flexShrink:0}},color),
+          React.createElement("div",{style:{flex:1,height:8,background:"#f0fdf4",borderRadius:99,overflow:"hidden"}},React.createElement("div",{style:{height:"100%",background:"linear-gradient(90deg,#4ade80,#15803d)",borderRadius:99,width:`${(n/items.length)*100}%`}})),
+          React.createElement("span",{style:{fontSize:12,color:"#6b7280",fontWeight:800,width:18,textAlign:"right"}},n)
+        );
+      })
+    ),
+    !isFilament&&CATEGORIES.map(cat=>{const n=items.filter(i=>i.category===cat).length;if(!n)return null;return React.createElement("div",{key:cat,style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
       React.createElement("span",{style:{width:140,fontSize:12,color:"#374151",fontWeight:700,flexShrink:0}},cat),
       React.createElement("div",{style:{flex:1,height:8,background:"#f0fdf4",borderRadius:99,overflow:"hidden"}},React.createElement("div",{style:{height:"100%",background:"linear-gradient(90deg,#4ade80,#15803d)",borderRadius:99,width:`${(n/items.length)*100}%`}})),
       React.createElement("span",{style:{fontSize:12,color:"#6b7280",fontWeight:800,width:18,textAlign:"right"}},n)
@@ -265,67 +393,142 @@ function StatsTab({items,totalVal}){
 }
 
 // ── Item Detail Sheet ─────────────────────────────────────────
-function ItemDetailSheet({item,hist,show,onClose,onEdit}){
+function ItemDetailSheet({item,hist,show,onClose,onEdit,onAdjust,onDelete,isFilament}){
   if(!item)return null;
   const ih=hist.filter(h=>h.itemId===item.id);
   const price=calcPrice(item.priceVal,item.priceMode,item.amount);
   const days=daysUntil(item.expiry);
   const low=isLowStock(item);
+  const stepFor=u=>["kg","L","g","mL"].includes(u)?0.1:1;
+  const isFilamentItem=isFilament||item.category==="🧵 Filament";
+
   return React.createElement(Sheet,{show,onClose,title:""},
     React.createElement("div",{style:{background:"linear-gradient(135deg,#f0fdf4,#dcfce7)",borderRadius:16,padding:"16px",marginBottom:16,border:"1px solid #bbf7d0"}},
       React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}},
         React.createElement("div",null,
-          React.createElement("div",{style:{fontSize:20,fontWeight:900,color:"#14532d"}},item.name),
-          React.createElement("div",{style:{fontSize:12,color:"#6b7280",marginTop:2}},`${item.category}${item.note?` · ${item.note}`:""}`)
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+            isFilamentItem&&item.color&&React.createElement("div",{style:{width:18,height:18,borderRadius:"50%",background:COLOR_HEX[item.color]||"#9ca3af",border:"2px solid rgba(0,0,0,0.15)",flexShrink:0}}),
+            React.createElement("div",{style:{fontSize:20,fontWeight:900,color:"#14532d"}},item.name)
+          ),
+          React.createElement("div",{style:{fontSize:12,color:"#6b7280",marginTop:4}},
+            isFilamentItem?[item.color,item.filamentType,item.note].filter(Boolean).join(" · "):(`${item.category||""}${item.note?` · ${item.note}`:""}`)
+          )
         ),
         React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}},
-          low&&React.createElement("span",{style:{background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800}},"🪫 Low Stock"),
-          React.createElement(Badge,{days})
+          low&&React.createElement("span",{style:{background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:800}},"🪫 Low"),
+          !isFilament&&React.createElement(Badge,{days})
         )
       ),
-      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:10}},
-        [{l:"Amount",v:`${item.amount} ${item.unit}`},{l:"Expiry",v:item.expiry?fmtDate(item.expiry):"Not set"},{l:"Total",v:price?`$${price.total}`:"—"},{l:`Per ${item.unit}`,v:price?`$${price.perUnit}`:"—"}].map(r=>
+      React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:12,padding:"10px 0",marginBottom:10,background:"rgba(255,255,255,0.5)",borderRadius:12}},
+        React.createElement("button",{onClick:()=>onAdjust(item,-stepFor(item.unit)),style:{width:36,height:36,borderRadius:"50%",background:"#fff",border:"2px solid #86efac",fontSize:20,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}},"−"),
+        React.createElement("span",{style:{fontSize:20,fontWeight:900,color:"#14532d",minWidth:90,textAlign:"center"}},`${item.amount} `,React.createElement("span",{style:{fontSize:14,fontWeight:600,color:"#6b7280"}},item.unit)),
+        React.createElement("button",{onClick:()=>onAdjust(item,stepFor(item.unit)),style:{width:36,height:36,borderRadius:"50%",background:"#fff",border:"2px solid #86efac",fontSize:20,cursor:"pointer",color:"#16a34a",fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}},"+")
+      ),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+        [
+          isFilamentItem&&{l:"Color",v:item.color||"—"},
+          isFilamentItem&&{l:"Type",v:item.filamentType||"—"},
+          {l:isFilamentItem?"Date Bought":"Expiry",v:item.expiry?fmtDate(item.expiry):"Not set"},
+          {l:"Low Alert At",v:`${getLowThreshold(item)} ${item.unit}`},
+          !isFilamentItem&&{l:"Total",v:price?`$${price.total}`:"—"},
+          !isFilamentItem&&{l:`Per ${item.unit}`,v:price?`$${price.perUnit}`:"—"},
+        ].filter(Boolean).map(r=>
           React.createElement("div",{key:r.l,style:{background:"rgba(255,255,255,0.7)",borderRadius:10,padding:"8px 10px"}},
             React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:0.5}},r.l),
-            React.createElement("div",{style:{fontSize:14,fontWeight:800,color:"#111827",marginTop:2}},r.v)
+            React.createElement("div",{style:{fontSize:13,fontWeight:800,color:"#111827",marginTop:2}},r.v)
           )
         )
       ),
-      React.createElement("button",{onClick:onEdit,style:{marginTop:12,width:"100%",padding:"9px",borderRadius:12,border:"none",background:"#16a34a",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"✏️ Edit Item")
+      React.createElement("div",{style:{display:"flex",gap:8,marginTop:12}},
+        React.createElement("button",{onClick:onEdit,style:{flex:1,padding:"9px",borderRadius:12,border:"none",background:"#16a34a",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"✏️ Edit"),
+        React.createElement("button",{onClick:()=>{onDelete(item);onClose();},style:{padding:"9px 14px",borderRadius:12,border:"none",background:"#fff1f2",color:"#dc2626",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"🗑️")
+      )
     ),
-    React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:4}},`📋 Item History (${ih.length})`),
-    ih.length===0
-      ?React.createElement("div",{style:{color:"#9ca3af",fontSize:13,padding:"20px 0",textAlign:"center"}},"No changes recorded yet.")
-      :ih.map(e=>React.createElement(HRow,{key:e.id,ev:e,showItem:false}))
+    React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:4}},`📋 History (${ih.length})`),
+    ih.length===0?React.createElement("div",{style:{color:"#9ca3af",fontSize:13,padding:"20px 0",textAlign:"center"}},"No changes yet."):ih.map(e=>React.createElement(HRow,{key:e.id,ev:e,showItem:false}))
   );
 }
 
 // ── Item Form ─────────────────────────────────────────────────
-function ItemFormFull({item,onSave,onClose,quickItems,pinnedItems,onTogglePin}){
-  const [f,setF]=useState(item?{name:item.name||"",amount:String(item.amount)||"",unit:item.unit||"units",category:item.category||"🧴 Other",expiry:item.expiry||"",priceVal:String(item.priceVal||""),priceMode:item.priceMode||"per unit",note:item.note||""}:{name:"",amount:"",unit:"units",category:"🧴 Other",expiry:"",priceVal:"",priceMode:"per unit",note:""});
+function ItemFormFull({item,onSave,onClose,quickItems,pinnedItems,onTogglePin,isFilament}){
+  const defCategory=isFilament?"🧵 Filament":item?.category||"🧴 Other";
+  const [f,setF]=useState(item?{
+    name:item.name||"",amount:String(item.amount)||"",unit:item.unit||(isFilament?"g":"units"),
+    category:item.category||defCategory,expiry:item.expiry||"",
+    priceVal:String(item.priceVal||""),priceMode:item.priceMode||"per unit",note:item.note||"",
+    lowThreshold:String(item.lowThreshold??1),
+    color:item.color||FILAMENT_COLORS[0],filamentType:item.filamentType||FILAMENT_TYPES[0],
+  }:{
+    name:"",amount:"",unit:isFilament?"g":"units",category:defCategory,expiry:"",
+    priceVal:"",priceMode:"per unit",note:"",lowThreshold:"1",
+    color:FILAMENT_COLORS[0],filamentType:FILAMENT_TYPES[0],
+  });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   const derived=useMemo(()=>calcPrice(f.priceVal,f.priceMode,f.amount),[f.priceVal,f.priceMode,f.amount]);
   const inp={width:"100%",padding:"10px 12px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
+  const isFilamentItem=isFilament||f.category==="🧵 Filament";
 
   return React.createElement("div",null,
-    quickItems.length>0&&React.createElement("div",{style:{marginBottom:14}},
+    // Quick add
+    !isFilament&&quickItems.length>0&&React.createElement("div",{style:{marginBottom:14}},
       React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"⚡ Quick Add"),
       React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
         quickItems.map(q=>React.createElement("button",{key:q.name,onClick:()=>set("name",q.name),style:{padding:"5px 12px",borderRadius:20,border:`1.5px solid ${q.pinned?"#16a34a":"#d1fae5"}`,background:q.pinned?"#f0fdf4":"#fff",color:q.pinned?"#15803d":"#374151",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}},q.pinned&&"📌 ",q.name))
       )
     ),
+    // Name
     React.createElement("div",{style:{marginBottom:12}},
-      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Item Name *"),
+      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Name *"),
       React.createElement("div",{style:{position:"relative"}},
-        React.createElement("input",{style:{...inp,paddingRight:40},placeholder:"e.g. Whole Milk…",value:f.name,onChange:e=>set("name",e.target.value)}),
-        f.name.trim()&&React.createElement("button",{onClick:()=>onTogglePin(f.name.trim()),style:{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:16,opacity:(pinnedItems||[]).includes(f.name.trim())?1:0.3}},"📌")
+        React.createElement("input",{style:{...inp,paddingRight:40},placeholder:isFilament?"e.g. eSun PLA+ Black…":"e.g. Whole Milk…",value:f.name,onChange:e=>set("name",e.target.value)}),
+        !isFilament&&f.name.trim()&&React.createElement("button",{onClick:()=>onTogglePin(f.name.trim()),style:{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:16,opacity:(pinnedItems||[]).includes(f.name.trim())?1:0.3}},"📌")
       )
     ),
+    // Filament-specific fields
+    isFilamentItem&&React.createElement("div",{style:{background:"#f0fdf4",borderRadius:14,padding:"12px",marginBottom:12,border:"1px solid #dcfce7"}},
+      React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#15803d",textTransform:"uppercase",letterSpacing:0.8,marginBottom:10}},"🧵 Filament Details"),
+      // Color picker
+      React.createElement("div",{style:{marginBottom:10}},
+        React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Color"),
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+          React.createElement("div",{style:{width:22,height:22,borderRadius:"50%",background:COLOR_HEX[f.color]||"#9ca3af",border:"2px solid rgba(0,0,0,0.15)",flexShrink:0}}),
+          React.createElement("select",{style:{...inp,flex:1,background:"#fff"},value:f.color,onChange:e=>set("color",e.target.value)},
+            FILAMENT_COLORS.map(c=>React.createElement("option",{key:c},c))
+          )
+        )
+      ),
+      // Type picker
+      React.createElement("div",null,
+        React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Filament Type"),
+        React.createElement("select",{style:{...inp,background:"#fff"},value:f.filamentType,onChange:e=>set("filamentType",e.target.value)},
+          FILAMENT_TYPES.map(t=>React.createElement("option",{key:t},t))
+        )
+      )
+    ),
+    // Amount + Unit
     React.createElement("div",{style:{display:"flex",gap:10,marginBottom:12}},
       React.createElement("div",{style:{flex:1}},React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Amount *"),React.createElement("input",{style:inp,type:"number",min:"0",step:"0.01",placeholder:"0",value:f.amount,onChange:e=>set("amount",e.target.value)})),
       React.createElement("div",{style:{flex:1}},React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Unit"),React.createElement("select",{style:inp,value:f.unit,onChange:e=>set("unit",e.target.value)},UNITS.map(u=>React.createElement("option",{key:u},u))))
     ),
-    React.createElement("div",{style:{background:"#f0fdf4",borderRadius:14,padding:"12px",marginBottom:12,border:"1px solid #dcfce7"}},
+    // Low stock threshold
+    React.createElement("div",{style:{marginBottom:12}},
+      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Low Stock Alert At (optional, default 1)"),
+      React.createElement("input",{style:inp,type:"number",min:"0",step:"0.1",placeholder:"1",value:f.lowThreshold,onChange:e=>set("lowThreshold",e.target.value)})
+    ),
+    // Category (pantry only)
+    !isFilamentItem&&React.createElement("div",{style:{marginBottom:12}},
+      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Category"),
+      React.createElement("select",{style:inp,value:f.category,onChange:e=>set("category",e.target.value)},
+        CATEGORIES.map(c=>React.createElement("option",{key:c},c))
+      )
+    ),
+    // Expiry / Date Bought
+    React.createElement("div",{style:{marginBottom:12}},
+      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},isFilamentItem?"Date Bought (optional)":"Expiry Date (optional)"),
+      React.createElement("input",{style:inp,type:"date",value:f.expiry,onChange:e=>set("expiry",e.target.value)})
+    ),
+    // Price (pantry only)
+    !isFilamentItem&&React.createElement("div",{style:{background:"#f0fdf4",borderRadius:14,padding:"12px",marginBottom:12,border:"1px solid #dcfce7"}},
       React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,marginBottom:8}},"💰 Price (optional)"),
       React.createElement("div",{style:{display:"flex",gap:10}},
         React.createElement("input",{style:{...inp,flex:1,background:"#fff"},type:"number",min:"0",step:"0.01",placeholder:"0.00",value:f.priceVal,onChange:e=>set("priceVal",e.target.value)}),
@@ -336,11 +539,14 @@ function ItemFormFull({item,onSave,onClose,quickItems,pinnedItems,onTogglePin}){
         parseFloat(f.amount)>1&&React.createElement("span",{style:{color:"#6b7280"}},`Per ${f.unit}: $${derived.perUnit}`)
       )
     ),
-    React.createElement("div",{style:{marginBottom:12}},React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Category"),React.createElement("select",{style:inp,value:f.category,onChange:e=>set("category",e.target.value)},CATEGORIES.map(c=>React.createElement("option",{key:c},c)))),
-    React.createElement("div",{style:{marginBottom:16}},React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Expiry Date"),React.createElement("input",{style:inp,type:"date",value:f.expiry,onChange:e=>set("expiry",e.target.value)})),
+    // Note
+    React.createElement("div",{style:{marginBottom:16}},
+      React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"Note (optional)"),
+      React.createElement("input",{style:inp,placeholder:isFilamentItem?"e.g. Brand, bought from Amazon…":"e.g. Organic, from Costco…",value:f.note,onChange:e=>set("note",e.target.value)})
+    ),
     React.createElement("div",{style:{display:"flex",gap:10}},
       React.createElement("button",{onClick:onClose,style:{flex:1,padding:"11px",borderRadius:12,border:"1.5px solid #d1fae5",background:"#fff",color:"#6b7280",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}},"Cancel"),
-      React.createElement("button",{onClick:()=>{if(f.name.trim()&&f.amount)onSave(f);},style:{flex:2,padding:"11px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#16a34a,#15803d)",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",fontFamily:"inherit"}},item?"Save Changes":"Add to Pantry")
+      React.createElement("button",{onClick:()=>{if(f.name.trim()&&f.amount)onSave(f);},style:{flex:2,padding:"11px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#16a34a,#15803d)",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",fontFamily:"inherit"}},item?"Save Changes":"Add Item")
     )
   );
 }
@@ -358,7 +564,7 @@ function MembersPanel({list,isAdmin,inviteEmail,setInviteEmail,inviteMsg,onInvit
       inviteMsg.err&&React.createElement("div",{style:{color:"#dc2626",fontSize:12,marginTop:6,padding:"6px 10px",background:"#fee2e2",borderRadius:8}},inviteMsg.err),
       inviteMsg.ok&&React.createElement("div",{style:{color:"#16a34a",fontSize:12,marginTop:6,padding:"6px 10px",background:"#f0fdf4",borderRadius:8}},inviteMsg.ok)
     ),
-    React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"Current Members"),
+    React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"Members"),
     (list.memberEmails||[list.adminEmail]).map((email,i)=>React.createElement("div",{key:email,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #f0fdf4"}},
       React.createElement("div",null,
         React.createElement("div",{style:{fontSize:14,fontWeight:700,color:"#111827"}},email),
@@ -371,6 +577,7 @@ function MembersPanel({list,isAdmin,inviteEmail,setInviteEmail,inviteMsg,onInvit
 
 // ── List View ─────────────────────────────────────────────────
 function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
+  const isFilament=list.listType==="filament";
   const [items,setItems]=useState([]);
   const [hist,setHist]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -388,20 +595,18 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   const [hFilter,setHFilter]=useState("all");
   const [inviteEmail,setInviteEmail]=useState("");
   const [inviteMsg,setInviteMsg]=useState({});
+  const [showProfile,setShowProfile]=useState(false);
   const isAdmin=list.adminId===userId;
+  const photoURL=auth.currentUser?.photoURL||userProfile?.photoURL||"";
 
   useEffect(()=>{
     const q=query(collection(db,"lists",list.id,"items"),orderBy("addedAt","desc"));
-    const unsub=onSnapshot(q,snap=>{setItems(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});
-    return unsub;
+    return onSnapshot(q,snap=>{setItems(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});
   },[list.id]);
-
   useEffect(()=>{
     const q=query(collection(db,"lists",list.id,"history"),orderBy("ts","desc"));
-    const unsub=onSnapshot(q,snap=>{setHist(snap.docs.map(d=>({id:d.id,...d.data()})));});
-    return unsub;
+    return onSnapshot(q,snap=>{setHist(snap.docs.map(d=>({id:d.id,...d.data()})));});
   },[list.id]);
-
   useEffect(()=>{
     getDoc(doc(db,"users",userId)).then(snap=>{
       const freq=snap.data()?.itemFrequency||{};
@@ -413,172 +618,112 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   async function addHist(itemId,itemName,action,detail){
     await addDoc(collection(db,"lists",list.id,"history"),{itemId,itemName,action,detail,user:auth.currentUser?.displayName||auth.currentUser?.email||"Unknown",userId,ts:serverTimestamp()});
   }
-
   async function togglePin(name){
-    const uref=doc(db,"users",userId);
-    const isPinned=pinnedItems.includes(name);
-    const updated=isPinned?pinnedItems.filter(n=>n!==name):[...pinnedItems,name];
+    const updated=pinnedItems.includes(name)?pinnedItems.filter(n=>n!==name):[...pinnedItems,name];
     setPinnedItems(updated);
-    await updateDoc(uref,{pinnedItems:updated});
+    await updateDoc(doc(db,"users",userId),{pinnedItems:updated});
   }
-
   async function adjust(item,delta){
     const nv=Math.max(0,parseFloat((item.amount+delta).toFixed(3)));
     await updateDoc(doc(db,"lists",list.id,"items",item.id),{amount:nv});
     await addHist(item.id,item.name,delta>0?"increased":"decreased",`${item.amount} ${item.unit} → ${nv} ${item.unit}`);
+    if(detailItem&&detailItem.id===item.id)setDetailItem({...item,amount:nv});
   }
-
   async function saveItem(f){
-    const data={...f,amount:parseFloat(f.amount),priceVal:f.priceVal?parseFloat(f.priceVal):null,updatedAt:serverTimestamp()};
+    const data={...f,amount:parseFloat(f.amount),priceVal:f.priceVal?parseFloat(f.priceVal):null,lowThreshold:f.lowThreshold!=""?parseFloat(f.lowThreshold):1,updatedAt:serverTimestamp(),category:isFilament?"🧵 Filament":f.category};
     if(editItem){
       await updateDoc(doc(db,"lists",list.id,"items",editItem.id),data);
       await addHist(editItem.id,f.name,"edited","Item details updated");
     }else{
       const ref=await addDoc(collection(db,"lists",list.id,"items"),{...data,addedAt:serverTimestamp()});
       await addHist(ref.id,f.name,"added",`${f.amount} ${f.unit} added`);
-      const uref=doc(db,"users",userId);
-      const snap=await getDoc(uref);
-      const freq=snap.data()?.itemFrequency||{};
-      freq[f.name.trim()]=(freq[f.name.trim()]||0)+1;
-      await updateDoc(uref,{itemFrequency:freq});
+      if(!isFilament){
+        const uref=doc(db,"users",userId);
+        const snap=await getDoc(uref);
+        const freq=snap.data()?.itemFrequency||{};
+        freq[f.name.trim()]=(freq[f.name.trim()]||0)+1;
+        await updateDoc(uref,{itemFrequency:freq});
+      }
     }
     setShowAdd(false);setEditItem(null);
   }
-
   async function deleteItem(item){
     await addHist(item.id,item.name,"removed",`${item.amount} ${item.unit} removed`);
     await deleteDoc(doc(db,"lists",list.id,"items",item.id));
   }
-
-  // ── FIXED: invite by scanning all users client-side (no index needed) ──
   async function inviteMember(){
     setInviteMsg({});
     const emailToFind=inviteEmail.trim().toLowerCase();
-    if(!emailToFind){setInviteMsg({err:"Please enter an email address."});return;}
+    if(!emailToFind){setInviteMsg({err:"Please enter an email."});return;}
     try{
-      // Fetch all user docs and match email client-side — avoids any index requirement
       const allUsers=await getDocs(collection(db,"users"));
       const match=allUsers.docs.find(d=>(d.data().email||"").toLowerCase()===emailToFind);
-      if(!match){setInviteMsg({err:"No MyPantry account found with that email. They need to sign up first."});return;}
-      if(list.memberIds.includes(match.id)){setInviteMsg({err:"This person is already a member."});return;}
+      if(!match){setInviteMsg({err:"No account found. They need to sign up first."});return;}
+      if(list.memberIds.includes(match.id)){setInviteMsg({err:"Already a member."});return;}
       await updateDoc(doc(db,"lists",list.id),{memberIds:arrayUnion(match.id),memberEmails:arrayUnion(emailToFind)});
       await updateDoc(doc(db,"users",match.id),{listIds:arrayUnion(list.id)});
-      setInviteMsg({ok:`✅ ${emailToFind} has been added!`});
+      setInviteMsg({ok:`✅ ${emailToFind} added!`});
       setInviteEmail("");
-    }catch(e){setInviteMsg({err:"Something went wrong. Check your connection and try again."});}
+    }catch(e){setInviteMsg({err:"Something went wrong."});}
   }
 
-  const filtered=useMemo(()=>items.filter(i=>i.name?.toLowerCase().includes(search.toLowerCase())&&(filterCat==="All"||i.category===filterCat)).sort((a,b)=>sortBy==="expiry"?(daysUntil(a.expiry)??9999)-(daysUntil(b.expiry)??9999):sortBy==="name"?a.name?.localeCompare(b.name):a.category?.localeCompare(b.category)),[items,search,filterCat,sortBy]);
-  const expiring=items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d<=3;});
+  const filtered=useMemo(()=>items
+    .filter(i=>i.name?.toLowerCase().includes(search.toLowerCase())&&(filterCat==="All"||i.category===filterCat||isFilament))
+    .sort((a,b)=>sortBy==="expiry"?(daysUntil(a.expiry)??9999)-(daysUntil(b.expiry)??9999):sortBy==="name"?a.name?.localeCompare(b.name):a.category?.localeCompare(b.category))
+  ,[items,search,filterCat,sortBy]);
+
+  const expiring=!isFilament?items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d<=3;}):[];
   const lowStock=items.filter(i=>isLowStock(i));
-  const alertCount=items.filter(i=>daysUntil(i.expiry)<0).length+items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;}).length+lowStock.length;
+  const alertCount=(!isFilament?(items.filter(i=>daysUntil(i.expiry)<0).length+items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;}).length):0)+lowStock.length;
   const totalVal=items.reduce((acc,i)=>{const p=calcPrice(i.priceVal,i.priceMode,i.amount);return acc+(p?parseFloat(p.total):0);},0);
   const filtHist=useMemo(()=>hFilter==="all"?hist:hist.filter(h=>h.action===hFilter),[hist,hFilter]);
   const quickItems=useMemo(()=>{const p=(pinnedItems||[]).map(n=>({name:n,pinned:true}));const fr=(frequentItems||[]).filter(n=>!(pinnedItems||[]).includes(n)).slice(0,8).map(n=>({name:n,pinned:false}));return[...p,...fr].slice(0,12);},[pinnedItems,frequentItems]);
   const inp={width:"100%",padding:"10px 12px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
+  const TABS=[["items","📦 Items"],["alerts","⚠️"+(alertCount>0?` (${alertCount})`:"")],["chat","💬 Chat"],["history","🕐 History"],["stats","📊 Stats"]];
+  const listColor=isFilament?"linear-gradient(135deg,#7c3aed,#5b21b6)":"linear-gradient(135deg,#16a34a,#15803d)";
 
   return React.createElement("div",{style:{fontFamily:"'Nunito',sans-serif",background:"#f0fdf4",minHeight:"100vh",maxWidth:480,margin:"0 auto"}},
-    React.createElement("header",{style:{background:"linear-gradient(135deg,#16a34a,#15803d)",padding:"13px 14px",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 12px rgba(22,163,74,0.3)",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+    React.createElement("header",{style:{background:listColor,padding:"13px 14px",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 12px rgba(0,0,0,0.2)",display:"flex",alignItems:"center",justifyContent:"space-between"}},
       React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
         React.createElement("button",{onClick:onBack,style:{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,color:"#fff",fontWeight:900,fontSize:17,cursor:"pointer",padding:"4px 12px",fontFamily:"inherit"}},"←"),
         React.createElement("div",null,
           React.createElement("div",{style:{display:"flex",alignItems:"center",gap:7}},
-            React.createElement("span",{style:{fontSize:18,fontWeight:900,color:"#fff"}},`${list.emoji} ${list.name}`),
-            isHome&&React.createElement("span",{style:{background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"🏠 HOME")
+            React.createElement("span",{style:{fontSize:17,fontWeight:900,color:"#fff"}},`${list.emoji} ${list.name}`),
+            isHome&&React.createElement("span",{style:{background:"rgba(255,255,255,0.25)",color:"#fff",borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"🏠 HOME"),
+            isFilament&&React.createElement("span",{style:{background:"rgba(255,255,255,0.2)",color:"#fff",borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"🧵")
           ),
           React.createElement("div",{style:{fontSize:11,color:"rgba(255,255,255,0.65)"}},`${list.memberEmails?.length||1} members · ${items.length} items`)
         )
       ),
-      React.createElement("div",{style:{display:"flex",gap:6}},
+      React.createElement("div",{style:{display:"flex",gap:6,alignItems:"center"}},
         React.createElement("button",{onClick:()=>onSetHome(list.id),style:{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,color:"#fff",fontSize:15,cursor:"pointer",padding:"6px 10px"}},isHome?"🏠":"🏡"),
         isAdmin&&React.createElement("button",{onClick:()=>setShowMembers(true),style:{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,color:"#fff",fontSize:15,cursor:"pointer",padding:"6px 10px"}},"👥"),
-        React.createElement("button",{onClick:()=>{setEditItem(null);setShowAdd(true);},style:{background:"#fff",color:"#16a34a",border:"none",borderRadius:20,padding:"7px 14px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"+ Add")
+        React.createElement(Avatar,{size:32,photoURL,displayName:auth.currentUser?.displayName,onClick:()=>setShowProfile(true),style:{border:"2px solid rgba(255,255,255,0.5)"}}),
+        React.createElement("button",{onClick:()=>{setEditItem(null);setShowAdd(true);},style:{background:"#fff",color:isFilament?"#7c3aed":"#16a34a",border:"none",borderRadius:20,padding:"7px 14px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"+ Add")
       )
     ),
     (expiring.length>0||lowStock.length>0)&&React.createElement("div",{style:{background:"#fef3c7",borderBottom:"2px solid #f59e0b",padding:"8px 14px",display:"flex",gap:8,alignItems:"center"}},
       React.createElement("span",null,"⚠️"),
-      React.createElement("span",{style:{fontSize:12,color:"#92400e",fontWeight:700}},
-        [expiring.length>0&&`${expiring.length} expiring soon`,lowStock.length>0&&`${lowStock.length} low stock`].filter(Boolean).join(" · ")
-      )
+      React.createElement("span",{style:{fontSize:12,color:"#92400e",fontWeight:700}},[expiring.length>0&&`${expiring.length} expiring soon`,lowStock.length>0&&`${lowStock.length} low/empty`].filter(Boolean).join(" · "))
     ),
-    React.createElement("nav",{style:{display:"flex",background:"#fff",borderBottom:"1px solid #dcfce7"}},
-      [["items","📦 Items"],["alerts","⚠️"+(alertCount>0?` (${alertCount})` :"")],["history","🕐 History"],["stats","📊 Stats"]].map(([k,l])=>
-        React.createElement("button",{key:k,onClick:()=>setTab(k),style:{flex:1,padding:"10px 2px",background:"none",border:"none",borderBottom:`3px solid ${tab===k?"#16a34a":"transparent"}`,cursor:"pointer",fontSize:11,fontWeight:700,color:tab===k?"#16a34a":"#9ca3af",fontFamily:"inherit",whiteSpace:"nowrap"}},l)
-      )
+    React.createElement("nav",{style:{display:"flex",background:"#fff",borderBottom:"1px solid #dcfce7",overflowX:"auto"}},
+      TABS.map(([k,l])=>React.createElement("button",{key:k,onClick:()=>setTab(k),style:{flexShrink:0,padding:"10px 10px",background:"none",border:"none",borderBottom:`3px solid ${tab===k?(isFilament?"#7c3aed":"#16a34a"):"transparent"}`,cursor:"pointer",fontSize:11,fontWeight:700,color:tab===k?(isFilament?"#7c3aed":"#16a34a"):"#9ca3af",fontFamily:"inherit",whiteSpace:"nowrap"}},l))
     ),
-    React.createElement("main",{style:{padding:"14px 14px 80px"}},
-      tab==="items"&&React.createElement(ItemsTab,{filtered,items,hist,search,setSearch,filterCat,setFilterCat,sortBy,setSortBy,totalVal,loading,setEditItem,setShowAdd,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},adjust,deleteItem,inp}),
-      tab==="alerts"&&React.createElement(AlertsTab,{items,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);}}),
+    React.createElement("main",{style:{padding:tab==="chat"?"0":"14px 14px 80px"}},
+      tab==="items"&&React.createElement(ItemsTab,{filtered,items,hist,search,setSearch,filterCat,setFilterCat,sortBy,setSortBy,totalVal,loading,setEditItem,setShowAdd,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},adjust,deleteItem,inp,isFilament}),
+      tab==="alerts"&&React.createElement(AlertsTab,{items,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},isFilament}),
+      tab==="chat"&&React.createElement(ChatTab,{listId:list.id,userId,userProfile}),
       tab==="history"&&React.createElement(HistoryTab,{hist:filtHist,hFilter,setHFilter}),
-      tab==="stats"&&React.createElement(StatsTab,{items,totalVal})
+      tab==="stats"&&React.createElement(StatsTab,{items,totalVal,isFilament})
     ),
     React.createElement(Sheet,{show:showAdd,onClose:()=>{setShowAdd(false);setEditItem(null);},title:editItem?"Edit Item":"Add Item"},
-      React.createElement(ItemFormFull,{item:editItem,onSave:saveItem,onClose:()=>{setShowAdd(false);setEditItem(null);},quickItems,pinnedItems,onTogglePin:togglePin})
+      React.createElement(ItemFormFull,{item:editItem,onSave:saveItem,onClose:()=>{setShowAdd(false);setEditItem(null);},quickItems,pinnedItems,onTogglePin:togglePin,isFilament})
     ),
     React.createElement(Sheet,{show:showMembers,onClose:()=>setShowMembers(false),title:"👥 Members"},
       React.createElement(MembersPanel,{list,isAdmin,inviteEmail,setInviteEmail,inviteMsg,onInvite:inviteMember,onRemove:async(uid,email)=>{await updateDoc(doc(db,"lists",list.id),{memberIds:arrayRemove(uid),memberEmails:arrayRemove(email)});await updateDoc(doc(db,"users",uid),{listIds:arrayRemove(list.id)});}})
     ),
-    React.createElement(ItemDetailSheet,{item:detailItem,hist,show:showDetail,onClose:()=>setShowDetail(false),onEdit:()=>{setEditItem(detailItem);setShowDetail(false);setShowAdd(true);}})
-  );
-}
-
-// ── Profile Tab ───────────────────────────────────────────────
-function ProfileTab({userId,userProfile}){
-  const [newName,setNewName]=useState(auth.currentUser?.displayName||"");
-  const [saving,setSaving]=useState(false);
-  const [msg,setMsg]=useState("");
-
-  async function saveName(){
-    if(!newName.trim())return;
-    setSaving(true);
-    await updateProfile(auth.currentUser,{displayName:newName.trim()});
-    await updateDoc(doc(db,"users",userId),{name:newName.trim()});
-    setMsg("Name updated!");setSaving(false);
-    setTimeout(()=>setMsg(""),2500);
-  }
-
-  const inp={width:"100%",padding:"11px 14px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
-
-  return React.createElement("div",{style:{padding:"16px 14px 80px",fontFamily:"'Nunito',sans-serif"}},
-    // Avatar
-    React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",padding:"28px 0 24px"}},
-      React.createElement("div",{style:{width:80,height:80,borderRadius:"50%",background:"linear-gradient(135deg,#16a34a,#15803d)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,marginBottom:12,boxShadow:"0 4px 16px rgba(22,163,74,0.3)"}},
-        (auth.currentUser?.displayName||"?")[0].toUpperCase()
-      ),
-      React.createElement("div",{style:{fontSize:20,fontWeight:900,color:"#14532d"}},(auth.currentUser?.displayName||"User")),
-      React.createElement("div",{style:{fontSize:13,color:"#9ca3af",marginTop:4}},(auth.currentUser?.email||""))
-    ),
-
-    // Account info card
-    React.createElement("div",{style:{background:"#fff",borderRadius:16,padding:"16px",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1.5px solid #f0fdf4"}},
-      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:14}},"Account Details"),
-      React.createElement("div",{style:{marginBottom:12}},
-        React.createElement("div",{style:{fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4}},"EMAIL ADDRESS"),
-        React.createElement("div",{style:{fontSize:14,fontWeight:700,color:"#111827",padding:"10px 12px",background:"#f9fafb",borderRadius:10,border:"1.5px solid #f0fdf4"}},(auth.currentUser?.email||"—"))
-      ),
-      React.createElement("div",null,
-        React.createElement("div",{style:{fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4}},"DISPLAY NAME"),
-        React.createElement("div",{style:{display:"flex",gap:8}},
-          React.createElement("input",{style:{...inp,flex:1},value:newName,onChange:e=>setNewName(e.target.value),placeholder:"Your name"}),
-          React.createElement("button",{onClick:saveName,disabled:saving,style:{padding:"11px 16px",borderRadius:12,border:"none",background:"#16a34a",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}},saving?"…":"Save")
-        ),
-        msg&&React.createElement("div",{style:{color:"#16a34a",fontSize:12,marginTop:6,fontWeight:700}},msg)
-      )
-    ),
-
-    // Stats card
-    React.createElement("div",{style:{background:"#fff",borderRadius:16,padding:"16px",marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1.5px solid #f0fdf4"}},
-      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:14}},"My Account"),
-      [{l:"User ID",v:(userId||"").slice(0,16)+"…"},{l:"Lists",v:userProfile?.listIds?.length||0},{l:"Pinned Items",v:userProfile?.pinnedItems?.length||0}].map(r=>
-        React.createElement("div",{key:r.l,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f0fdf4"}},
-          React.createElement("span",{style:{fontSize:13,color:"#6b7280",fontWeight:600}},r.l),
-          React.createElement("span",{style:{fontSize:13,fontWeight:800,color:"#111827"}},r.v)
-        )
-      )
-    ),
-
-    // Sign out
-    React.createElement("button",{onClick:()=>signOut(auth),style:{width:"100%",padding:"13px",borderRadius:14,border:"1.5px solid #fecaca",background:"#fff5f5",color:"#dc2626",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit"}},"🚪 Sign Out")
+    React.createElement(ItemDetailSheet,{item:detailItem,hist,show:showDetail,onClose:()=>setShowDetail(false),onEdit:()=>{setEditItem(detailItem);setShowDetail(false);setShowAdd(true);},onAdjust:adjust,onDelete:deleteItem,isFilament}),
+    React.createElement(ProfileSheet,{show:showProfile,onClose:()=>setShowProfile(false),userId,userProfile})
   );
 }
 
@@ -591,9 +736,11 @@ function HomeScreen({userId,userProfile}){
   const [showCreate,setShowCreate]=useState(false);
   const [newName,setNewName]=useState("");
   const [newEmoji,setNewEmoji]=useState("🏠");
+  const [newType,setNewType]=useState("pantry");
   const [creating,setCreating]=useState(false);
-  const [mainTab,setMainTab]=useState("lists"); // "lists" | "profile"
-  const emojis=["🏠","🛒","🍽️","❄️","🌿","🎒","⭐","🧺"];
+  const [showProfile,setShowProfile]=useState(false);
+  const emojis=["🏠","🛒","🍽️","❄️","🌿","🎒","⭐","🧺","🧵","🖨️","🎨","📦"];
+  const photoURL=auth.currentUser?.photoURL||userProfile?.photoURL||"";
 
   useEffect(()=>{
     if(!userProfile?.listIds?.length){setLoading(false);return;}
@@ -610,17 +757,15 @@ function HomeScreen({userId,userProfile}){
   async function createList(){
     if(!newName.trim())return;
     setCreating(true);
-    const ref=await addDoc(collection(db,"lists"),{name:newName.trim(),emoji:newEmoji,adminId:userId,adminEmail:auth.currentUser.email,memberIds:[userId],memberEmails:[auth.currentUser.email],createdAt:serverTimestamp()});
+    const ref=await addDoc(collection(db,"lists"),{name:newName.trim(),emoji:newEmoji,listType:newType,adminId:userId,adminEmail:auth.currentUser.email,memberIds:[userId],memberEmails:[auth.currentUser.email],createdAt:serverTimestamp()});
     await updateDoc(doc(db,"users",userId),{listIds:arrayUnion(ref.id)});
-    setNewName("");setCreating(false);setShowCreate(false);
+    setNewName("");setNewType("pantry");setCreating(false);setShowCreate(false);
   }
-
   async function setHomeList(listId){
     const newHome=listId===homeListId?null:listId;
     setHomeListId(newHome);
     await updateDoc(doc(db,"users",userId),{homeListId:newHome});
   }
-
   async function deleteList(list){
     if(!window.confirm(`Delete "${list.name}"?`))return;
     await deleteDoc(doc(db,"lists",list.id));
@@ -637,72 +782,75 @@ function HomeScreen({userId,userProfile}){
 
   return React.createElement("div",{style:{fontFamily:"'Nunito',sans-serif",background:"#f0fdf4",minHeight:"100vh",maxWidth:480,margin:"0 auto"}},
     React.createElement("header",{style:{background:"linear-gradient(135deg,#16a34a,#15803d)",padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 12px rgba(22,163,74,0.3)"}},
-      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
-        React.createElement("span",{style:{fontSize:28}},"🥬"),
+      // Profile avatar replaces logo
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10},onClick:()=>setShowProfile(true)},
+        React.createElement(Avatar,{size:40,photoURL,displayName:auth.currentUser?.displayName,onClick:()=>setShowProfile(true)}),
         React.createElement("div",null,
-          React.createElement("div",{style:{fontSize:20,fontWeight:900,color:"#fff",letterSpacing:-0.5}},"MyPantry"),
-          React.createElement("div",{style:{fontSize:11,color:"rgba(255,255,255,0.65)"}},`Hi, ${auth.currentUser?.displayName||"there"} 👋`)
+          React.createElement("div",{style:{fontSize:16,fontWeight:900,color:"#fff",letterSpacing:-0.3}},"MyPantry"),
+          React.createElement("div",{style:{fontSize:11,color:"rgba(255,255,255,0.75)"}},`${auth.currentUser?.displayName||"Hi there"} · tap to edit`)
         )
       ),
-      mainTab==="lists"&&React.createElement("button",{onClick:()=>setShowCreate(true),style:{background:"#fff",color:"#16a34a",border:"none",borderRadius:20,padding:"7px 16px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"+ New List")
+      React.createElement("button",{onClick:()=>setShowCreate(true),style:{background:"#fff",color:"#16a34a",border:"none",borderRadius:20,padding:"7px 16px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit"}},"+ New List")
     ),
-
-    // Bottom nav tabs
-    React.createElement("nav",{style:{display:"flex",background:"#fff",borderBottom:"1px solid #dcfce7"}},
-      [["lists","🏠 Lists"],["profile","👤 Profile"]].map(([k,l])=>
-        React.createElement("button",{key:k,onClick:()=>setMainTab(k),style:{flex:1,padding:"11px 4px",background:"none",border:"none",borderBottom:`3px solid ${mainTab===k?"#16a34a":"transparent"}`,cursor:"pointer",fontSize:13,fontWeight:700,color:mainTab===k?"#16a34a":"#9ca3af",fontFamily:"inherit"}},l)
-      )
-    ),
-
-    // Lists tab
-    mainTab==="lists"&&React.createElement("main",{style:{padding:"16px 14px 80px"}},
+    React.createElement("main",{style:{padding:"16px 14px 80px"}},
       loading?React.createElement(Spinner,null):React.createElement("div",null,
         homeList&&React.createElement("div",{style:{marginBottom:22}},
           React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8}},"🏠 Home List"),
-          React.createElement("div",{onClick:()=>setActiveList(homeList.id),style:{background:"linear-gradient(135deg,#16a34a,#15803d)",borderRadius:18,padding:"18px",cursor:"pointer",boxShadow:"0 4px 16px rgba(22,163,74,0.3)"}},
+          React.createElement("div",{onClick:()=>setActiveList(homeList.id),style:{background:homeList.listType==="filament"?"linear-gradient(135deg,#7c3aed,#5b21b6)":"linear-gradient(135deg,#16a34a,#15803d)",borderRadius:18,padding:"18px",cursor:"pointer",boxShadow:"0 4px 16px rgba(0,0,0,0.2)"}},
             React.createElement("div",{style:{display:"flex",alignItems:"center",gap:14}},
               React.createElement("span",{style:{fontSize:40}},homeList.emoji),
               React.createElement("div",null,
                 React.createElement("div",{style:{fontSize:22,fontWeight:900,color:"#fff"}},homeList.name),
-                React.createElement("div",{style:{fontSize:12,color:"rgba(255,255,255,0.7)",marginTop:2}},`${homeList.memberEmails?.length||1} members`)
+                React.createElement("div",{style:{fontSize:12,color:"rgba(255,255,255,0.7)",marginTop:2}},`${homeList.memberEmails?.length||1} members${homeList.listType==="filament"?" · 🧵 Filament":""}`)
               )
             )
           )
         ),
         React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:8}},`All Lists (${lists.length})`),
-        lists.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px"}},
-          React.createElement("div",{style:{fontSize:48,marginBottom:12}},"📋"),
-          React.createElement("div",{style:{fontWeight:700,color:"#374151"}},"No lists yet"),
-          React.createElement("div",{style:{fontSize:13}},"Tap '+ New List' to get started!")
-        ),
+        lists.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px"}},React.createElement("div",{style:{fontSize:48,marginBottom:12}},"📋"),React.createElement("div",{style:{fontWeight:700,color:"#374151"}},"No lists yet"),React.createElement("div",{style:{fontSize:13}},"Tap '+ New List' to get started!")),
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-          lists.map(list=>React.createElement("div",{key:list.id,onClick:()=>setActiveList(list.id),style:{background:"#fff",borderRadius:16,padding:"14px 16px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1.5px solid #f0fdf4",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between"}},
-            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:12}},
-              React.createElement("span",{style:{fontSize:28}},list.emoji),
-              React.createElement("div",null,
-                React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
-                  React.createElement("span",{style:{fontSize:15,fontWeight:800,color:"#111827"}},list.name),
-                  list.id===homeListId&&React.createElement("span",{style:{background:"#dcfce7",color:"#15803d",borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"HOME")
-                ),
-                React.createElement("div",{style:{fontSize:12,color:"#9ca3af",marginTop:2}},`${list.memberEmails?.length||1} member${(list.memberEmails?.length||1)!==1?"s":""}`)
+          lists.map(list=>{
+            const isFilament=list.listType==="filament";
+            const accent=isFilament?"#7c3aed":"#16a34a";
+            const accentBg=isFilament?"#faf5ff":"#dcfce7";
+            return React.createElement("div",{key:list.id,onClick:()=>setActiveList(list.id),style:{background:"#fff",borderRadius:16,padding:"14px 16px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:`1.5px solid #f0fdf4`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:12}},
+                React.createElement("span",{style:{fontSize:28}},list.emoji),
+                React.createElement("div",null,
+                  React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
+                    React.createElement("span",{style:{fontSize:15,fontWeight:800,color:"#111827"}},list.name),
+                    list.id===homeListId&&React.createElement("span",{style:{background:accentBg,color:accent,borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"HOME"),
+                    isFilament&&React.createElement("span",{style:{background:"#faf5ff",color:"#7c3aed",borderRadius:20,padding:"1px 7px",fontSize:10,fontWeight:800}},"🧵")
+                  ),
+                  React.createElement("div",{style:{fontSize:12,color:"#9ca3af",marginTop:2}},`${list.memberEmails?.length||1} member${(list.memberEmails?.length||1)!==1?"s":""}`)
+                )
+              ),
+              React.createElement("div",{style:{display:"flex",gap:6},onClick:e=>e.stopPropagation()},
+                React.createElement("button",{onClick:()=>setHomeList(list.id),style:{background:"#f3f4f6",border:"none",borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:14}},list.id===homeListId?"🏠":"🏡"),
+                list.adminId===userId&&React.createElement("button",{onClick:()=>deleteList(list),style:{background:"#fff1f2",border:"none",borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:14}},"🗑️")
               )
-            ),
-            React.createElement("div",{style:{display:"flex",gap:6},onClick:e=>e.stopPropagation()},
-              React.createElement("button",{onClick:()=>setHomeList(list.id),style:{background:"#f3f4f6",border:"none",borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:14}},list.id===homeListId?"🏠":"🏡"),
-              list.adminId===userId&&React.createElement("button",{onClick:()=>deleteList(list),style:{background:"#fff1f2",border:"none",borderRadius:8,padding:"6px 8px",cursor:"pointer",fontSize:14}},"🗑️")
-            )
-          ))
+            );
+          })
         )
       )
     ),
-
-    // Profile tab
-    mainTab==="profile"&&React.createElement(ProfileTab,{userId,userProfile}),
-
+    // Create list sheet
     React.createElement(Sheet,{show:showCreate,onClose:()=>setShowCreate(false),title:"New List"},
       React.createElement("div",null,
+        // List type selector
+        React.createElement("div",{style:{marginBottom:14}},
+          React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:8}},"List Type"),
+          React.createElement("div",{style:{display:"flex",gap:8}},
+            [{k:"pantry",l:"🥬 Pantry",desc:"Food & groceries"},{k:"filament",l:"🧵 Filament",desc:"3D printing filament"}].map(t=>
+              React.createElement("div",{key:t.k,onClick:()=>setNewType(t.k),style:{flex:1,padding:"12px",borderRadius:12,border:`2px solid ${newType===t.k?"#16a34a":"#e5e7eb"}`,background:newType===t.k?"#f0fdf4":"#fff",cursor:"pointer",textAlign:"center"}},
+                React.createElement("div",{style:{fontWeight:800,fontSize:14,color:newType===t.k?"#16a34a":"#374151"}},t.l),
+                React.createElement("div",{style:{fontSize:11,color:"#9ca3af",marginTop:2}},t.desc)
+              )
+            )
+          )
+        ),
         React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:4}},"List Name"),
-        React.createElement("input",{style:inp,placeholder:"e.g. Family Pantry, Fridge…",value:newName,onChange:e=>setNewName(e.target.value)}),
+        React.createElement("input",{style:inp,placeholder:newType==="filament"?"e.g. My Filaments…":"e.g. Family Pantry…",value:newName,onChange:e=>setNewName(e.target.value)}),
         React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,display:"block",marginBottom:8}},"Icon"),
         React.createElement("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}},
           emojis.map(e=>React.createElement("button",{key:e,onClick:()=>setNewEmoji(e),style:{fontSize:20,width:42,height:42,borderRadius:10,border:`2px solid ${newEmoji===e?"#16a34a":"#e5e7eb"}`,background:newEmoji===e?"#f0fdf4":"#fff",cursor:"pointer"}},e))
@@ -712,7 +860,8 @@ function HomeScreen({userId,userProfile}){
           React.createElement("button",{onClick:createList,disabled:creating,style:{flex:2,padding:"11px",borderRadius:12,border:"none",background:"linear-gradient(135deg,#16a34a,#15803d)",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",fontFamily:"inherit"}},creating?"Creating…":"Create List")
         )
       )
-    )
+    ),
+    React.createElement(ProfileSheet,{show:showProfile,onClose:()=>setShowProfile(false),userId,userProfile})
   );
 }
 
@@ -720,20 +869,16 @@ function HomeScreen({userId,userProfile}){
 function App(){
   const [user,setUser]=useState(undefined);
   const [userProfile,setUserProfile]=useState(null);
-
   useEffect(()=>{
-    const unsub=onAuthStateChanged(auth,async u=>{
+    return onAuthStateChanged(auth,async u=>{
       setUser(u);
       if(u){
         const snap=await getDoc(doc(db,"users",u.uid));
-        setUserProfile(snap.exists()?snap.data():{listIds:[],pinnedItems:[],homeListId:null,itemFrequency:{}});
-        const profUnsub=onSnapshot(doc(db,"users",u.uid),s=>{if(s.exists())setUserProfile(s.data());});
-        return profUnsub;
+        setUserProfile(snap.exists()?snap.data():{listIds:[],pinnedItems:[],homeListId:null,itemFrequency:{},photoURL:""});
+        return onSnapshot(doc(db,"users",u.uid),s=>{if(s.exists())setUserProfile(s.data());});
       }else setUserProfile(null);
     });
-    return unsub;
   },[]);
-
   if(user===undefined)return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f0fdf4"}},React.createElement(Spinner,null));
   if(!user)return React.createElement(AuthScreen,null);
   if(!userProfile)return React.createElement(Spinner,null);
