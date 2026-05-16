@@ -4,8 +4,10 @@ const { auth, db } = window.firebaseRefs;
 const { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } = window.firebaseAuth;
 const { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, serverTimestamp, orderBy, limit } = window.firebaseFirestore;
 
-const UNITS = ["units","pcs","kg","g","L","mL","bottles","cans","bags","boxes"];
+const UNITS = ["units","piece","kg","g","L","mL","bottles","cans","bags","boxes"];
 const PRICE_MODES = ["per unit","per kg","per box","per bottle","per can","total"];
+// Units where per-piece weight pricing makes sense
+const PIECE_UNITS = ["piece","units"];
 const CATEGORIES = ["🥩 Meat & Fish","🥦 Vegetables","🍎 Fruits","🥛 Dairy","🌾 Grains","🥫 Canned","🧊 Frozen","🧴 Other"];
 const FILAMENT_COLORS = ["Black","White","Grey","Red","Dark Red","Orange","Yellow","Lime","Green","Dark Green","Teal","Cyan","Sky Blue","Blue","Navy","Purple","Violet","Pink","Magenta","Brown","Beige","Gold","Silver","Transparent","Glow in Dark","Silk Red","Silk Gold","Silk Silver","Silk Blue","Silk Green","Rainbow","Wood Fill","Carbon Fiber","Marble"];
 const FILAMENT_TYPES = ["PLA","PLA+","PLA HS","PETG","ABS","ASA","TPU","Nylon","PC","HIPS","PVA","CPE","PP","PA","PA-CF","PETG-CF","PLA-CF","ABS-CF","Resin","Other"];
@@ -24,6 +26,13 @@ function daysUntil(e){if(!e)return null;const t=new Date();t.setHours(0,0,0,0);r
 function fmtDate(d){if(!d)return"";return new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});}
 function fmtTime(iso){if(!iso)return"";const d=new Date(iso),now=new Date(),dm=Math.floor((now-d)/60000);if(dm<1)return"Just now";if(dm<60)return`${dm}m ago`;const dh=Math.floor(dm/60);if(dh<24)return`${dh}h ago`;const dd=Math.floor(dh/24);if(dd<7)return`${dd}d ago`;return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});}
 function calcPrice(pv,pm,a){if(!pv||!a)return null;const p=parseFloat(pv),amt=parseFloat(a);if(isNaN(p)||isNaN(amt)||amt===0)return null;if(pm==="total")return{total:p.toFixed(2),perUnit:(p/amt).toFixed(2)};return{total:(p*amt).toFixed(2),perUnit:p.toFixed(2)};}
+// Weight-based pricing: weightPerPiece (g) + pricePerKg → cost per piece and total
+function calcWeightPrice(weightPerPiece,pricePerKg,amount){
+  const w=parseFloat(weightPerPiece),p=parseFloat(pricePerKg),a=parseFloat(amount);
+  if(isNaN(w)||isNaN(p)||isNaN(a)||w===0||p===0)return null;
+  const perPiece=(w/1000)*p;
+  return{perPiece:perPiece.toFixed(2),total:(perPiece*a).toFixed(2),weightPerPiece:w,pricePerKg:p};
+}
 function getLowThreshold(item){const t=parseFloat(item.lowThreshold);return isNaN(t)?1:t;}
 function isLowStock(item){const a=parseFloat(item.amount);if(isNaN(a))return false;if(a===0)return true;return a<=getLowThreshold(item);}
 function colorSwatch(color){const hex=COLOR_HEX[color]||"#9ca3af";const isGrad=hex.startsWith("linear");return React.createElement("span",{style:{display:"inline-block",width:14,height:14,borderRadius:"50%",background:hex,border:"1.5px solid rgba(0,0,0,0.15)",verticalAlign:"middle",marginRight:5,flexShrink:0}});}
@@ -249,6 +258,8 @@ function ItemsTab({filtered,items,hist,search,setSearch,filterCat,setFilterCat,s
       filtered.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px",fontSize:14}},"Nothing here. Tap '+ Add'!"),
       filtered.map((item,idx)=>{
         const days=daysUntil(item.expiry),low=isLowStock(item),urgent=days!==null&&days<=2;
+        const isWeightBased=item.priceType==="weight";
+        const price=isWeightBased?calcWeightPrice(item.weightPerPiece,item.pricePerKg,item.amount):calcPrice(item.priceVal,item.priceMode,item.amount);
         const rowBg=urgent?"#fffbeb":low?"#fff5f5":"#fff";
         const isLast=idx===filtered.length-1;
         const isFilamentItem=isFilament||item.category==="🧵 Filament";
@@ -396,7 +407,10 @@ function StatsTab({items,totalVal,isFilament}){
 function ItemDetailSheet({item,hist,show,onClose,onEdit,onAdjust,onDelete,isFilament}){
   if(!item)return null;
   const ih=hist.filter(h=>h.itemId===item.id);
-  const price=calcPrice(item.priceVal,item.priceMode,item.amount);
+  const price=item.priceType==="weight"
+    ?calcWeightPrice(item.weightPerPiece,item.pricePerKg,item.amount)
+    :calcPrice(item.priceVal,item.priceMode,item.amount);
+  const isWeightPrice=item.priceType==="weight"&&price;
   const days=daysUntil(item.expiry);
   const low=isLowStock(item);
   const stepFor=u=>["kg","L","g","mL"].includes(u)?0.1:1;
@@ -430,8 +444,12 @@ function ItemDetailSheet({item,hist,show,onClose,onEdit,onAdjust,onDelete,isFila
           isFilamentItem&&{l:"Type",v:item.filamentType||"—"},
           {l:isFilamentItem?"Date Bought":"Expiry",v:item.expiry?fmtDate(item.expiry):"Not set"},
           {l:"Low Alert At",v:`${getLowThreshold(item)} ${item.unit}`},
-          !isFilamentItem&&{l:"Total",v:price?`$${price.total}`:"—"},
-          !isFilamentItem&&{l:`Per ${item.unit}`,v:price?`$${price.perUnit}`:"—"},
+          !isFilamentItem&&!isWeightPrice&&{l:"Total",v:price?`$${price.total}`:"—"},
+          !isFilamentItem&&!isWeightPrice&&{l:`Per ${item.unit}`,v:price?`$${price.perUnit}`:"—"},
+          !isFilamentItem&&isWeightPrice&&{l:"Per piece",v:`$${price.perPiece}`},
+          !isFilamentItem&&isWeightPrice&&{l:"Total",v:`$${price.total}`},
+          !isFilamentItem&&isWeightPrice&&{l:"Weight/piece",v:`${item.weightPerPiece}g`},
+          !isFilamentItem&&isWeightPrice&&{l:"Price/kg",v:`$${item.pricePerKg}`},
         ].filter(Boolean).map(r=>
           React.createElement("div",{key:r.l,style:{background:"rgba(255,255,255,0.7)",borderRadius:10,padding:"8px 10px"}},
             React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:0.5}},r.l),
@@ -458,13 +476,20 @@ function ItemFormFull({item,onSave,onClose,quickItems,pinnedItems,onTogglePin,is
     priceVal:String(item.priceVal||""),priceMode:item.priceMode||"per unit",note:item.note||"",
     lowThreshold:String(item.lowThreshold??1),
     color:item.color||FILAMENT_COLORS[0],filamentType:item.filamentType||FILAMENT_TYPES[0],
+    // Weight-based pricing fields
+    priceType:item.priceType||"simple", // "simple" | "weight"
+    weightPerPiece:String(item.weightPerPiece||""),
+    pricePerKg:String(item.pricePerKg||""),
   }:{
     name:"",amount:"",unit:isFilament?"g":"units",category:defCategory,expiry:"",
     priceVal:"",priceMode:"per unit",note:"",lowThreshold:"1",
     color:FILAMENT_COLORS[0],filamentType:FILAMENT_TYPES[0],
+    priceType:"simple",weightPerPiece:"",pricePerKg:"",
   });
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const isPieceUnit=PIECE_UNITS.includes(f.unit);
   const derived=useMemo(()=>calcPrice(f.priceVal,f.priceMode,f.amount),[f.priceVal,f.priceMode,f.amount]);
+  const weightDerived=useMemo(()=>calcWeightPrice(f.weightPerPiece,f.pricePerKg,f.amount),[f.weightPerPiece,f.pricePerKg,f.amount]);
   const inp={width:"100%",padding:"10px 12px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
   const isFilamentItem=isFilament||f.category==="🧵 Filament";
 
@@ -529,14 +554,49 @@ function ItemFormFull({item,onSave,onClose,quickItems,pinnedItems,onTogglePin,is
     ),
     // Price (pantry only)
     !isFilamentItem&&React.createElement("div",{style:{background:"#f0fdf4",borderRadius:14,padding:"12px",marginBottom:12,border:"1px solid #dcfce7"}},
-      React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,marginBottom:8}},"💰 Price (optional)"),
-      React.createElement("div",{style:{display:"flex",gap:10}},
-        React.createElement("input",{style:{...inp,flex:1,background:"#fff"},type:"number",min:"0",step:"0.01",placeholder:"0.00",value:f.priceVal,onChange:e=>set("priceVal",e.target.value)}),
-        React.createElement("select",{style:{...inp,flex:1,background:"#fff"},value:f.priceMode,onChange:e=>set("priceMode",e.target.value)},PRICE_MODES.map(m=>React.createElement("option",{key:m},m)))
+      React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.8,marginBottom:10}},"💰 Price (optional)"),
+      // Price mode toggle — only show weight option for piece units
+      isPieceUnit&&React.createElement("div",{style:{display:"flex",background:"#fff",borderRadius:10,padding:3,marginBottom:10,border:"1px solid #d1fae5"}},
+        [{k:"simple",l:"Price per piece"},{k:"weight",l:"Weight × $/kg"}].map(opt=>
+          React.createElement("button",{key:opt.k,onClick:()=>set("priceType",opt.k),style:{flex:1,padding:"7px 4px",borderRadius:8,border:"none",background:f.priceType===opt.k?"#16a34a":"transparent",color:f.priceType===opt.k?"#fff":"#6b7280",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}},opt.l)
+        )
       ),
-      derived&&React.createElement("div",{style:{display:"flex",gap:14,marginTop:8,fontSize:13,fontWeight:700}},
-        React.createElement("span",{style:{color:"#16a34a"}},`Total: $${derived.total}`),
-        parseFloat(f.amount)>1&&React.createElement("span",{style:{color:"#6b7280"}},`Per ${f.unit}: $${derived.perUnit}`)
+      // Simple mode
+      f.priceType==="simple"&&React.createElement("div",null,
+        React.createElement("div",{style:{display:"flex",gap:10}},
+          React.createElement("input",{style:{...inp,flex:1,background:"#fff"},type:"number",min:"0",step:"0.01",placeholder:"0.00",value:f.priceVal,onChange:e=>set("priceVal",e.target.value)}),
+          React.createElement("select",{style:{...inp,flex:1,background:"#fff"},value:f.priceMode,onChange:e=>set("priceMode",e.target.value)},PRICE_MODES.map(m=>React.createElement("option",{key:m},m)))
+        ),
+        derived&&React.createElement("div",{style:{display:"flex",gap:14,marginTop:8,fontSize:13,fontWeight:700}},
+          React.createElement("span",{style:{color:"#16a34a"}},`Total: $${derived.total}`),
+          parseFloat(f.amount)>1&&React.createElement("span",{style:{color:"#6b7280"}},`Per piece: $${derived.perUnit}`)
+        )
+      ),
+      // Weight-based mode
+      f.priceType==="weight"&&React.createElement("div",null,
+        React.createElement("div",{style:{fontSize:11,color:"#6b7280",marginBottom:8}},
+          "Enter the weight of each piece and your price per kg — the app calculates the rest."
+        ),
+        React.createElement("div",{style:{display:"flex",gap:10,marginBottom:8}},
+          React.createElement("div",{style:{flex:1}},
+            React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.5,display:"block",marginBottom:4}},"Weight per piece (g)"),
+            React.createElement("input",{style:{...inp,background:"#fff"},type:"number",min:"0",step:"1",placeholder:"e.g. 250",value:f.weightPerPiece,onChange:e=>set("weightPerPiece",e.target.value)})
+          ),
+          React.createElement("div",{style:{flex:1}},
+            React.createElement("label",{style:{fontSize:10,fontWeight:800,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.5,display:"block",marginBottom:4}},"Price per kg ($)"),
+            React.createElement("input",{style:{...inp,background:"#fff"},type:"number",min:"0",step:"0.01",placeholder:"e.g. 12.00",value:f.pricePerKg,onChange:e=>set("pricePerKg",e.target.value)})
+          )
+        ),
+        weightDerived&&React.createElement("div",{style:{background:"rgba(22,163,74,0.08)",borderRadius:10,padding:"8px 12px",fontSize:13,fontWeight:700}},
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},
+            React.createElement("span",{style:{color:"#6b7280"}},"Per piece"),
+            React.createElement("span",{style:{color:"#16a34a"}},`$${weightDerived.perPiece}`)
+          ),
+          parseFloat(f.amount)>0&&React.createElement("div",{style:{display:"flex",justifyContent:"space-between"}},
+            React.createElement("span",{style:{color:"#6b7280"}},`Total (${f.amount} pieces)`),
+            React.createElement("span",{style:{color:"#16a34a"}},`$${weightDerived.total}`)
+          )
+        )
       )
     ),
     // Note
@@ -630,7 +690,14 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
     if(detailItem&&detailItem.id===item.id)setDetailItem({...item,amount:nv});
   }
   async function saveItem(f){
-    const data={...f,amount:parseFloat(f.amount),priceVal:f.priceVal?parseFloat(f.priceVal):null,lowThreshold:f.lowThreshold!=""?parseFloat(f.lowThreshold):1,updatedAt:serverTimestamp(),category:isFilament?"🧵 Filament":f.category};
+    const data={...f,amount:parseFloat(f.amount),
+      priceVal:f.priceVal?parseFloat(f.priceVal):null,
+      lowThreshold:f.lowThreshold!=""?parseFloat(f.lowThreshold):1,
+      weightPerPiece:f.weightPerPiece?parseFloat(f.weightPerPiece):null,
+      pricePerKg:f.pricePerKg?parseFloat(f.pricePerKg):null,
+      updatedAt:serverTimestamp(),
+      category:isFilament?"🧵 Filament":f.category
+    };
     if(editItem){
       await updateDoc(doc(db,"lists",list.id,"items",editItem.id),data);
       await addHist(editItem.id,f.name,"edited","Item details updated");
@@ -675,7 +742,10 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   const expiring=!isFilament?items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d<=3;}):[];
   const lowStock=items.filter(i=>isLowStock(i));
   const alertCount=(!isFilament?(items.filter(i=>daysUntil(i.expiry)<0).length+items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;}).length):0)+lowStock.length;
-  const totalVal=items.reduce((acc,i)=>{const p=calcPrice(i.priceVal,i.priceMode,i.amount);return acc+(p?parseFloat(p.total):0);},0);
+  const totalVal=items.reduce((acc,i)=>{
+    const p=i.priceType==="weight"?calcWeightPrice(i.weightPerPiece,i.pricePerKg,i.amount):calcPrice(i.priceVal,i.priceMode,i.amount);
+    return acc+(p?parseFloat(p.total):0);
+  },0);
   const filtHist=useMemo(()=>hFilter==="all"?hist:hist.filter(h=>h.action===hFilter),[hist,hFilter]);
   const quickItems=useMemo(()=>{const p=(pinnedItems||[]).map(n=>({name:n,pinned:true}));const fr=(frequentItems||[]).filter(n=>!(pinnedItems||[]).includes(n)).slice(0,8).map(n=>({name:n,pinned:false}));return[...p,...fr].slice(0,12);},[pinnedItems,frequentItems]);
   const inp={width:"100%",padding:"10px 12px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
