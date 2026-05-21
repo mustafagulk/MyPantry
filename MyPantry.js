@@ -1,3 +1,5 @@
+
+
 // MyPantry v6
 const { useState, useEffect, useMemo, useRef } = React;
 const { auth, db } = window.firebaseRefs;
@@ -188,12 +190,18 @@ function ChatTab({listId,userId,userProfile}){
   const [messages,setMessages]=useState([]);
   const [text,setText]=useState("");
   const [sending,setSending]=useState(false);
+  const [chatErr,setChatErr]=useState(null);
   const bottomRef=useRef(null);
   const photoURL=auth.currentUser?.photoURL||userProfile?.photoURL||"";
 
   useEffect(()=>{
+    setChatErr(null);
     const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"),limit(200));
-    return onSnapshot(q,snap=>{setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));});
+    const unsub=onSnapshot(q,
+      snap=>{setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));},
+      err=>{console.error("Chat error:",err);setChatErr("Chat could not load. Please update your Firestore rules — copy the new FIRESTORE_RULES.txt into Firebase Console → Firestore → Rules and publish.");}
+    );
+    return unsub;
   },[listId]);
 
   useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
@@ -216,8 +224,12 @@ function ChatTab({listId,userId,userProfile}){
   });
 
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"calc(100vh - 160px)"}},
+    chatErr&&React.createElement("div",{style:{margin:"16px 14px",padding:"14px",background:"#fee2e2",borderRadius:12,border:"1.5px solid #fecaca",color:"#dc2626",fontSize:13,fontWeight:600,lineHeight:1.5}},
+      React.createElement("div",{style:{fontWeight:800,marginBottom:4}},"⚠️ Chat unavailable"),
+      chatErr
+    ),
     React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:2}},
-      messages.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"60px 20px",fontSize:14,fontWeight:600}},React.createElement("div",{style:{fontSize:40,marginBottom:8}},"💬"),"No messages yet. Say hi!"),
+      !chatErr&&messages.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"60px 20px",fontSize:14,fontWeight:600}},React.createElement("div",{style:{fontSize:40,marginBottom:8}},"💬"),"No messages yet. Say hi!"),
       grouped.map(msg=>React.createElement("div",{key:msg.id,style:{display:"flex",flexDirection:"column",alignItems:msg.isMe?"flex-end":"flex-start",marginTop:msg.showAvatar?10:2}},
         msg.showAvatar&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexDirection:msg.isMe?"row-reverse":"row"}},
           React.createElement(Avatar,{size:22,photoURL:msg.photoURL,displayName:msg.userName}),
@@ -635,6 +647,145 @@ function MembersPanel({list,isAdmin,inviteEmail,setInviteEmail,inviteMsg,onInvit
   );
 }
 
+// ── Dashboard Tab ─────────────────────────────────────────────
+function DashboardTab({items,isFilament,openDetail,setTab,totalVal,alertCount}){
+  const cats=isFilament?["🧵 Filament"]:CATEGORIES;
+
+  // Summary numbers
+  const expired=items.filter(i=>daysUntil(i.expiry)<0);
+  const soonExp=items.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;});
+  const low=items.filter(i=>isLowStock(i));
+
+  // Category data
+  const catData=cats.map(cat=>{
+    const catItems=items.filter(i=>i.category===cat);
+    if(!catItems.length)return null;
+    const expiredCat=catItems.filter(i=>daysUntil(i.expiry)<0);
+    const soonCat=catItems.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=7;});
+    const lowCat=catItems.filter(i=>isLowStock(i));
+    // Next expiring item
+    const withExpiry=catItems.filter(i=>i.expiry).sort((a,b)=>(daysUntil(a.expiry)??9999)-(daysUntil(b.expiry)??9999));
+    const nextExp=withExpiry[0]||null;
+    return{cat,items:catItems,expired:expiredCat,soon:soonCat,low:lowCat,nextExp,count:catItems.length};
+  }).filter(Boolean);
+
+  // Filament: group by color instead
+  const filamentColors=isFilament?[...new Set(items.map(i=>i.color).filter(Boolean))]:[];
+
+  function StatusDot({color}){
+    return React.createElement("span",{style:{width:8,height:8,borderRadius:"50%",background:color,display:"inline-block",flexShrink:0}});
+  }
+
+  function SummaryCard({label,value,color,bg,onClick}){
+    return React.createElement("div",{onClick,style:{background:bg,borderRadius:14,padding:"12px 10px",textAlign:"center",border:`1.5px solid ${color}33`,cursor:onClick?"pointer":"default",flex:1}},
+      React.createElement("div",{style:{fontSize:22,fontWeight:900,color}},(value)),
+      React.createElement("div",{style:{fontSize:10,fontWeight:800,color,textTransform:"uppercase",letterSpacing:0.5,marginTop:2,opacity:0.8}},label)
+    );
+  }
+
+  return React.createElement("div",null,
+    // Top summary bar
+    React.createElement("div",{style:{display:"flex",gap:8,marginBottom:16}},
+      React.createElement(SummaryCard,{label:"Items",value:items.length,color:"#16a34a",bg:"#f0fdf4"}),
+      !isFilament&&React.createElement(SummaryCard,{label:"Expiring",value:soonExp.length,color:"#d97706",bg:"#fffbeb",onClick:()=>setTab("alerts")}),
+      React.createElement(SummaryCard,{label:"Low/Empty",value:low.length,color:"#dc2626",bg:"#fff5f5",onClick:()=>setTab("alerts")}),
+      totalVal>0&&React.createElement(SummaryCard,{label:"Value",value:`$${totalVal.toFixed(0)}`,color:"#7c3aed",bg:"#faf5ff"})
+    ),
+
+    // Filament dashboard — cards by color
+    isFilament&&React.createElement("div",null,
+      React.createElement("div",{style:{fontSize:11,fontWeight:800,color:"#9ca3af",textTransform:"uppercase",letterSpacing:1,marginBottom:10}},"By Color"),
+      filamentColors.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"30px 0"}},"No filament added yet"),
+      filamentColors.map(color=>{
+        const colorItems=items.filter(i=>i.color===color);
+        const lowColor=colorItems.filter(i=>isLowStock(i));
+        return React.createElement("div",{key:color,style:{background:"#fff",borderRadius:16,padding:"14px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",border:"1.5px solid #f0fdf4"}},
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+            React.createElement("div",{style:{width:20,height:20,borderRadius:"50%",background:COLOR_HEX[color]||"#9ca3af",border:"2px solid rgba(0,0,0,0.12)",flexShrink:0}}),
+            React.createElement("span",{style:{fontWeight:900,fontSize:15,color:"#111827",flex:1}},color),
+            lowColor.length>0&&React.createElement("span",{style:{fontSize:11,background:"#fee2e2",color:"#dc2626",borderRadius:20,padding:"2px 8px",fontWeight:800}},`🪫 ${lowColor.length} low`)
+          ),
+          React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
+            colorItems.map(item=>React.createElement("div",{key:item.id,onClick:()=>openDetail(item),style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 10px",background:"#f9fafb",borderRadius:10,cursor:"pointer"}},
+              React.createElement("div",null,
+                React.createElement("span",{style:{fontSize:13,fontWeight:700,color:"#111827"}},item.name),
+                item.filamentType&&React.createElement("span",{style:{fontSize:11,color:"#9ca3af",marginLeft:6}},item.filamentType)
+              ),
+              React.createElement("span",{style:{fontSize:13,fontWeight:800,color:isLowStock(item)?"#dc2626":"#374151"}},`${item.amount} ${item.unit}`)
+            ))
+          )
+        );
+      })
+    ),
+
+    // Pantry dashboard — cards by category
+    !isFilament&&React.createElement("div",null,
+      catData.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"40px 20px"}},"Add some items to see your dashboard!"),
+      catData.map(({cat,items:catItems,expired:expCat,soon:soonCat,low:lowCat,nextExp,count})=>{
+        const hasIssues=expCat.length>0||soonCat.length>0||lowCat.length>0;
+        const borderColor=expCat.length>0?"#fecaca":soonCat.length>0?"#fde68a":lowCat.length>0?"#fca5a5":"#f0fdf4";
+        const headerBg=expCat.length>0?"#fff5f5":soonCat.length>0?"#fffbeb":lowCat.length>0?"#fff5f5":"#f0fdf4";
+
+        return React.createElement("div",{key:cat,style:{background:"#fff",borderRadius:18,marginBottom:12,boxShadow:"0 1px 6px rgba(0,0,0,0.07)",border:`1.5px solid ${borderColor}`,overflow:"hidden"}},
+          // Category header
+          React.createElement("div",{style:{background:headerBg,padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+              React.createElement("span",{style:{fontSize:18}},(cat.split(" ")[0])),
+              React.createElement("span",{style:{fontSize:14,fontWeight:900,color:"#111827"}},(cat.split(" ").slice(1).join(" "))),
+              React.createElement("span",{style:{background:"#fff",color:"#6b7280",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}},count)
+            ),
+            React.createElement("div",{style:{display:"flex",gap:5}},
+              expCat.length>0&&React.createElement("span",{style:{fontSize:10,background:"#dc2626",color:"#fff",borderRadius:20,padding:"2px 7px",fontWeight:800}},`${expCat.length} exp`),
+              soonCat.length>0&&React.createElement("span",{style:{fontSize:10,background:"#f59e0b",color:"#fff",borderRadius:20,padding:"2px 7px",fontWeight:800}},`${soonCat.length} soon`),
+              lowCat.length>0&&React.createElement("span",{style:{fontSize:10,background:"#ef4444",color:"#fff",borderRadius:20,padding:"2px 7px",fontWeight:800}},`${lowCat.length} low`)
+            )
+          ),
+          // Items list
+          React.createElement("div",{style:{padding:"6px 0"}},
+            catItems
+              .sort((a,b)=>{
+                // Sort: expired first, then expiring soon, then low stock, then by expiry
+                const da=daysUntil(a.expiry)??9999,db=daysUntil(b.expiry)??9999;
+                const aLow=isLowStock(a),bLow=isLowStock(b);
+                if(da<0&&db>=0)return -1;if(db<0&&da>=0)return 1;
+                if(aLow&&!bLow)return -1;if(bLow&&!aLow)return 1;
+                return da-db;
+              })
+              .map((item,idx,arr)=>{
+                const days=daysUntil(item.expiry);
+                const low=isLowStock(item);
+                const isLast=idx===arr.length-1;
+                const rowBg=days!==null&&days<0?"#fff5f5":days!==null&&days<=2?"#fffbeb":low?"#fff5f5":"#fff";
+                return React.createElement("div",{key:item.id,onClick:()=>openDetail(item),style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",background:rowBg,borderBottom:isLast?"none":"1px solid #f7faf8",cursor:"pointer",gap:8}},
+                  React.createElement("div",{style:{flex:1,minWidth:0}},
+                    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
+                      React.createElement("span",{style:{fontSize:13,fontWeight:700,color:"#111827",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},item.name),
+                      low&&React.createElement("span",{style:{fontSize:10,background:"#fee2e2",color:"#dc2626",borderRadius:8,padding:"1px 5px",fontWeight:800,flexShrink:0}},"🪫")
+                    ),
+                    item.expiry&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5,marginTop:2}},
+                      React.createElement("span",{style:{fontSize:11,color:days<0?"#dc2626":days<=2?"#d97706":days<=7?"#a16207":"#9ca3af"}},
+                        days<0?`Expired ${Math.abs(days)}d ago`:days===0?"Expires today":`${days}d left`
+                      )
+                    )
+                  ),
+                  React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0}},
+                    React.createElement("span",{style:{fontSize:13,fontWeight:800,color:low?"#dc2626":"#374151"}},`${item.amount} ${item.unit}`),
+                    React.createElement(Badge,{days})
+                  )
+                );
+              })
+          ),
+          // Next expiry footer (if items have expiry)
+          nextExp&&React.createElement("div",{style:{padding:"8px 14px",background:"#f9fafb",borderTop:"1px solid #f0fdf4",fontSize:11,color:"#9ca3af",display:"flex",justifyContent:"space-between"}},
+            React.createElement("span",null,"Next expiry"),
+            React.createElement("span",{style:{fontWeight:700,color:daysUntil(nextExp.expiry)<=7?"#d97706":"#374151"}},`${nextExp.name} · ${fmtDate(nextExp.expiry)}`)
+          )
+        );
+      })
+    )
+  );
+}
+
 // ── List View ─────────────────────────────────────────────────
 function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   const isFilament=list.listType==="filament";
@@ -644,7 +795,7 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   const [search,setSearch]=useState("");
   const [filterCat,setFilterCat]=useState("All");
   const [sortBy,setSortBy]=useState("expiry");
-  const [tab,setTab]=useState("items");
+  const [tab,setTab]=useState("dashboard");
   const [showAdd,setShowAdd]=useState(false);
   const [editItem,setEditItem]=useState(null);
   const [showMembers,setShowMembers]=useState(false);
@@ -749,7 +900,7 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
   const filtHist=useMemo(()=>hFilter==="all"?hist:hist.filter(h=>h.action===hFilter),[hist,hFilter]);
   const quickItems=useMemo(()=>{const p=(pinnedItems||[]).map(n=>({name:n,pinned:true}));const fr=(frequentItems||[]).filter(n=>!(pinnedItems||[]).includes(n)).slice(0,8).map(n=>({name:n,pinned:false}));return[...p,...fr].slice(0,12);},[pinnedItems,frequentItems]);
   const inp={width:"100%",padding:"10px 12px",borderRadius:12,border:"1.5px solid #d1fae5",fontSize:14,fontFamily:"inherit",outline:"none",background:"#f9fafb",boxSizing:"border-box"};
-  const TABS=[["items","📦 Items"],["alerts","⚠️"+(alertCount>0?` (${alertCount})`:"")],["chat","💬 Chat"],["history","🕐 History"],["stats","📊 Stats"]];
+  const TABS=[["dashboard","🗂️ Overview"],["items","📦 Items"],["alerts","⚠️"+(alertCount>0?` (${alertCount})`:"")],["chat","💬 Chat"],["history","🕐 History"],["stats","📊 Stats"]];
   const listColor=isFilament?"linear-gradient(135deg,#7c3aed,#5b21b6)":"linear-gradient(135deg,#16a34a,#15803d)";
 
   return React.createElement("div",{style:{fontFamily:"'Nunito',sans-serif",background:"#f0fdf4",minHeight:"100vh",maxWidth:480,margin:"0 auto"}},
@@ -780,6 +931,7 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
       TABS.map(([k,l])=>React.createElement("button",{key:k,onClick:()=>setTab(k),style:{flexShrink:0,padding:"10px 10px",background:"none",border:"none",borderBottom:`3px solid ${tab===k?(isFilament?"#7c3aed":"#16a34a"):"transparent"}`,cursor:"pointer",fontSize:11,fontWeight:700,color:tab===k?(isFilament?"#7c3aed":"#16a34a"):"#9ca3af",fontFamily:"inherit",whiteSpace:"nowrap"}},l))
     ),
     React.createElement("main",{style:{padding:tab==="chat"?"0":"14px 14px 80px"}},
+      tab==="dashboard"&&React.createElement(DashboardTab,{items,isFilament,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},setTab,totalVal,alertCount}),
       tab==="items"&&React.createElement(ItemsTab,{filtered,items,hist,search,setSearch,filterCat,setFilterCat,sortBy,setSortBy,totalVal,loading,setEditItem,setShowAdd,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},adjust,deleteItem,inp,isFilament}),
       tab==="alerts"&&React.createElement(AlertsTab,{items,openDetail:(item)=>{setDetailItem(item);setShowDetail(true);},isFilament}),
       tab==="chat"&&React.createElement(ChatTab,{listId:list.id,userId,userProfile}),
