@@ -209,7 +209,7 @@ function ChatTab({listId,userId,userProfile}){
     },8000);
 
     try{
-      const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"),limit(200));
+      const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"));
       const unsub=onSnapshot(q,
         snap=>{
           clearTimeout(timeout);
