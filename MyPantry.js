@@ -190,26 +190,75 @@ function ChatTab({listId,userId,userProfile}){
   const [messages,setMessages]=useState([]);
   const [text,setText]=useState("");
   const [sending,setSending]=useState(false);
-  const [chatErr,setChatErr]=useState(null);
+  const [status,setStatus]=useState("loading"); // "loading"|"ok"|"error"
+  const [chatErr,setChatErr]=useState("");
   const bottomRef=useRef(null);
+  const unsubRef=useRef(null);
   const photoURL=auth.currentUser?.photoURL||userProfile?.photoURL||"";
 
   useEffect(()=>{
-    setChatErr(null);
-    const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"),limit(200));
-    const unsub=onSnapshot(q,
-      snap=>{setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));},
-      err=>{console.error("Chat error:",err);setChatErr("Chat could not load. Please update your Firestore rules — copy the new FIRESTORE_RULES.txt into Firebase Console → Firestore → Rules and publish.");}
-    );
-    return unsub;
+    setStatus("loading");
+    setChatErr("");
+    setMessages([]);
+
+    // Timeout — if no response in 8s, show error
+    const timeout=setTimeout(()=>{
+      if(unsubRef.current)unsubRef.current();
+      setStatus("error");
+      setChatErr("Timed out loading chat. This usually means your Firestore rules are missing the chat rule. Go to Firebase Console → Firestore → Rules, paste the contents of FIRESTORE_RULES.txt and click Publish.");
+    },8000);
+
+    try{
+      const q=query(collection(db,"lists",listId,"chat"),orderBy("ts","asc"),limit(200));
+      const unsub=onSnapshot(q,
+        snap=>{
+          clearTimeout(timeout);
+          setMessages(snap.docs.map(d=>({id:d.id,...d.data()})));
+          setStatus("ok");
+        },
+        err=>{
+          clearTimeout(timeout);
+          console.error("Chat onSnapshot error:",err.code,err.message);
+          setStatus("error");
+          if(err.code==="permission-denied"){
+            setChatErr("Permission denied. Your Firestore rules are missing the chat subcollection rule. Go to Firebase Console → Firestore → Rules, paste FIRESTORE_RULES.txt and click Publish.");
+          }else if(err.code==="failed-precondition"){
+            setChatErr("Missing Firestore index. Go to Firebase Console → Firestore → Indexes and create a composite index on lists/{id}/chat with field 'ts Ascending'.");
+          }else{
+            setChatErr(`Error (${err.code}): ${err.message}`);
+          }
+        }
+      );
+      unsubRef.current=unsub;
+      return()=>{clearTimeout(timeout);unsub();};
+    }catch(e){
+      clearTimeout(timeout);
+      setStatus("error");
+      setChatErr(`Unexpected error: ${e.message}`);
+    }
   },[listId]);
 
-  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
+  useEffect(()=>{
+    if(status==="ok")bottomRef.current?.scrollIntoView({behavior:"smooth"});
+  },[messages,status]);
 
   async function send(){
-    const t=text.trim();if(!t||sending)return;
-    setSending(true);setText("");
-    await addDoc(collection(db,"lists",listId,"chat"),{text:t,userId,userName:auth.currentUser?.displayName||auth.currentUser?.email||"Unknown",photoURL,ts:serverTimestamp()});
+    const t=text.trim();
+    if(!t||sending)return;
+    setSending(true);
+    setText("");
+    try{
+      await addDoc(collection(db,"lists",listId,"chat"),{
+        text:t,userId,
+        userName:auth.currentUser?.displayName||auth.currentUser?.email||"Unknown",
+        photoURL:photoURL||"",
+        ts:serverTimestamp()
+      });
+    }catch(e){
+      console.error("Send error:",e);
+      alert("Could not send message: "+e.message);
+      setText(t);
+    }
     setSending(false);
   }
 
@@ -223,13 +272,36 @@ function ChatTab({listId,userId,userProfile}){
     return{...msg,showAvatar,isMe,ts};
   });
 
+  // Loading state
+  if(status==="loading") return React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"calc(100vh - 200px)",gap:12,color:"#9ca3af"}},
+    React.createElement("div",{style:{width:32,height:32,border:"3px solid #dcfce7",borderTopColor:"#16a34a",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}),
+    React.createElement("div",{style:{fontSize:13,fontWeight:600}},"Loading chat…"),
+    React.createElement("style",null,"@keyframes spin{to{transform:rotate(360deg)}}")
+  );
+
+  // Error state
+  if(status==="error") return React.createElement("div",{style:{padding:"20px 16px"}},
+    React.createElement("div",{style:{background:"#fee2e2",borderRadius:14,padding:"16px",border:"1.5px solid #fecaca"}},
+      React.createElement("div",{style:{fontSize:15,fontWeight:900,color:"#dc2626",marginBottom:8}},"⚠️ Chat unavailable"),
+      React.createElement("div",{style:{fontSize:13,color:"#7f1d1d",lineHeight:1.6,marginBottom:12}},chatErr),
+      React.createElement("div",{style:{fontSize:12,fontWeight:800,color:"#dc2626",marginBottom:6}},"How to fix:"),
+      React.createElement("ol",{style:{fontSize:12,color:"#7f1d1d",lineHeight:1.8,paddingLeft:18,margin:0}},
+        React.createElement("li",null,"Open Firebase Console"),
+        React.createElement("li",null,"Go to Firestore Database → Rules"),
+        React.createElement("li",null,"Replace all content with FIRESTORE_RULES.txt"),
+        React.createElement("li",null,"Click Publish"),
+        React.createElement("li",null,"Wait 30 seconds then reload the app")
+      )
+    )
+  );
+
+  // Normal chat UI
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"calc(100vh - 160px)"}},
-    chatErr&&React.createElement("div",{style:{margin:"16px 14px",padding:"14px",background:"#fee2e2",borderRadius:12,border:"1.5px solid #fecaca",color:"#dc2626",fontSize:13,fontWeight:600,lineHeight:1.5}},
-      React.createElement("div",{style:{fontWeight:800,marginBottom:4}},"⚠️ Chat unavailable"),
-      chatErr
-    ),
     React.createElement("div",{style:{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:2}},
-      !chatErr&&messages.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"60px 20px",fontSize:14,fontWeight:600}},React.createElement("div",{style:{fontSize:40,marginBottom:8}},"💬"),"No messages yet. Say hi!"),
+      messages.length===0&&React.createElement("div",{style:{textAlign:"center",color:"#9ca3af",padding:"60px 20px",fontSize:14,fontWeight:600}},
+        React.createElement("div",{style:{fontSize:40,marginBottom:8}},"💬"),
+        "No messages yet. Say hi!"
+      ),
       grouped.map(msg=>React.createElement("div",{key:msg.id,style:{display:"flex",flexDirection:"column",alignItems:msg.isMe?"flex-end":"flex-start",marginTop:msg.showAvatar?10:2}},
         msg.showAvatar&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexDirection:msg.isMe?"row-reverse":"row"}},
           React.createElement(Avatar,{size:22,photoURL:msg.photoURL,displayName:msg.userName}),
