@@ -4,7 +4,7 @@
 const { useState, useEffect, useMemo, useRef } = React;
 const { auth, db } = window.firebaseRefs;
 const { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } = window.firebaseAuth;
-const { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, serverTimestamp, orderBy, limit } = window.firebaseFirestore;
+const { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, serverTimestamp, orderBy } = window.firebaseFirestore;
 
 const UNITS = ["units","piece","kg","g","L","mL","bottles","cans","bags","boxes"];
 const PRICE_MODES = ["per unit","per kg","per box","per bottle","per can","total"];
@@ -884,7 +884,19 @@ function ListView({list,userId,userProfile,onBack,isHome,onSetHome}){
 
   useEffect(()=>{
     const q=query(collection(db,"lists",list.id,"items"),orderBy("addedAt","desc"));
-    return onSnapshot(q,snap=>{setItems(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});
+    return onSnapshot(q,snap=>{
+      const loaded=snap.docs.map(d=>({id:d.id,...d.data()}));
+      setItems(loaded);
+      setLoading(false);
+      // Fire notifications for expiring/low stock items
+      if(window.sendAlertNotifications){
+        const expiring=loaded.filter(i=>{const d=daysUntil(i.expiry);return d!==null&&d>=0&&d<=3;});
+        const lowStock=loaded.filter(i=>isLowStock(i));
+        if(expiring.length>0||lowStock.length>0){
+          window.sendAlertNotifications(expiring,lowStock);
+        }
+      }
+    });
   },[list.id]);
   useEffect(()=>{
     const q=query(collection(db,"lists",list.id,"history"),orderBy("ts","desc"));
@@ -1178,6 +1190,9 @@ function App(){
   if(!userProfile)return React.createElement(Spinner,null);
   return React.createElement(HomeScreen,{userId:user.uid,userProfile});
 }
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App,null));
 
 const root=ReactDOM.createRoot(document.getElementById("root"));
 root.render(React.createElement(App,null));
