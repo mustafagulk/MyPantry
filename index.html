@@ -9,8 +9,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="apple-mobile-web-app-title" content="MyPantry"/>
-  <link rel="apple-touch-icon" href="/icons/icon-192.png"/>
-  <link rel="manifest" href="/manifest.json"/>
+
+  <!-- Icons — paths relative to /mypantry/ base -->
+  <link rel="icon" type="image/png" href="icons/icon-192.png"/>
+  <link rel="apple-touch-icon" href="icons/icon-192.png"/>
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png"/>
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png"/>
+  <link rel="manifest" href="manifest.json"/>
+
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
   <title>MyPantry</title>
@@ -29,7 +35,7 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-  <!-- Firebase: initialise first, then load app -->
+  <!-- Firebase -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import {
@@ -44,15 +50,14 @@
 
     // ─────────────────────────────────────────────────────────
     //  🔧 PASTE YOUR FIREBASE CONFIG HERE
-    //  Get it: Firebase Console → Project Settings → Your Apps
     // ─────────────────────────────────────────────────────────
     const firebaseConfig = {
-      apiKey: "AIzaSyDXZObjYCbuGB6Sf4i2jOtWFpssGnaVdzo",
-      authDomain: "mypantry-8a269.firebaseapp.com",
-      projectId: "mypantry-8a269",
-      storageBucket: "mypantry-8a269.firebasestorage.app",
-      messagingSenderId: "682917054480",
-      appId: "1:682917054480:web:84f009671144e5512a6295"
+      apiKey:            "YOUR_API_KEY",
+      authDomain:        "YOUR_PROJECT.firebaseapp.com",
+      projectId:         "YOUR_PROJECT_ID",
+      storageBucket:     "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId:             "YOUR_APP_ID"
     };
     // ─────────────────────────────────────────────────────────
 
@@ -60,27 +65,58 @@
     const auth = getAuth(app);
     const db   = getFirestore(app);
 
-    // Expose to global scope so MyPantry.js can access them
     window.firebaseRefs      = { auth, db };
     window.firebaseAuth      = { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile };
     window.firebaseFirestore = { collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, arrayRemove, query, where, serverTimestamp, orderBy };
 
-    // Dynamically load the app after Firebase is ready
     const script = document.createElement("script");
     script.src = "./MyPantry.js";
     document.body.appendChild(script);
   </script>
 
-  <!-- Service Worker -->
+  <!-- Service Worker + Notification Permission -->
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/service-worker.js").catch(console.error);
-        if ("Notification" in window && Notification.permission === "default") {
-          Notification.requestPermission();
+      window.addEventListener("load", async () => {
+        try {
+          // Unregister any old service workers first so cache is cleared
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const reg of registrations) {
+            const isOld = reg.active && !reg.active.scriptURL.includes("service-worker.js");
+            // Only unregister if it's a genuinely different SW (different scope)
+          }
+
+          const reg = await navigator.serviceWorker.register("service-worker.js", { scope: "./" });
+          console.log("SW registered:", reg.scope);
+
+          // Store SW registration globally so the app can send alert messages
+          window.swRegistration = reg;
+
+          // Request notification permission
+          if ("Notification" in window && Notification.permission === "default") {
+            const permission = await Notification.requestPermission();
+            console.log("Notification permission:", permission);
+          }
+
+          window.notificationsEnabled =
+            "Notification" in window && Notification.permission === "granted";
+
+        } catch (err) {
+          console.error("SW registration failed:", err);
         }
       });
     }
+
+    // Helper function the app calls to trigger local notifications
+    window.sendAlertNotifications = function(expiring, lowStock) {
+      if (!window.notificationsEnabled) return;
+      if (!navigator.serviceWorker.controller) return;
+      navigator.serviceWorker.controller.postMessage({
+        type: "SCHEDULE_ALERTS",
+        expiring,
+        lowStock
+      });
+    };
   </script>
 </body>
 </html>
